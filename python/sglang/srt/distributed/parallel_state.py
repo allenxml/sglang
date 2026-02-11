@@ -249,8 +249,11 @@ class GroupCoordinator:
             self.device = torch.device(f"npu:{local_rank}")
         elif _is_xpu:
             self.device = torch.device(f"xpu:{local_rank}")
+<<<<<<< HEAD
         elif _is_musa:
             self.device = torch.device(f"musa:{local_rank}")
+=======
+>>>>>>> v0.5.8
         else:
             self.device = torch.device("cpu")
         self.device_module = torch.get_device_module(self.device)

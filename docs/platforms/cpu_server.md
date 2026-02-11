@@ -123,6 +123,10 @@ cp pyproject_cpu.toml pyproject.toml
 # Install SGLang dependent libs, and build SGLang main package
 uv pip install --upgrade pip setuptools
 uv pip install .
+<<<<<<< HEAD
+=======
+uv pip install torch==2.9.0 torchvision==0.24.0 torchaudio==2.9.0 torchao==0.14.1 triton==3.5.0 --force-reinstall
+>>>>>>> v0.5.8
 
 # Build the CPU backend kernels
 cd ../sgl-kernel

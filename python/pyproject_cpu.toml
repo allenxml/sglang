@@ -58,10 +58,14 @@ dependencies = [
   "tabulate",
   "tiktoken",
   "timm==1.0.16",
+<<<<<<< HEAD
   "torch==2.9.0",
   "torchao==0.14.1",
   "torchaudio==2.9.0",
   "torchvision==0.24.0",
+=======
+  "torchao==0.9.0",
+>>>>>>> v0.5.8
   "tqdm",
   "transformers==4.57.1",
   "triton==3.5.0",
