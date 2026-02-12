@@ -914,6 +914,31 @@ M python/sglang/srt/server_args.py
 
 ## 📝 Changelog（变更日志）
 
+### [v3.2] - 2026-02-12 ✅ **生产部署案例增强**
+
+**Completed（已完成）**
+- ✅ **新增 PD 分离部署章节**：从 LMSYS 官方博客提取 3 个真实生产案例
+  - Kimi K2 部署（128 H200 GPUs，吞吐 512K tokens/s）
+  - DeepSeek 部署（96 H100 GPUs，5x 加速）
+  - GB200 NVL72 部署（4.8x vs H100）
+- ✅ **新增 AI 网关章节**：RouteLLM 路由框架，降低 85% 成本
+- ✅ **完整配置示例**：单节点/多节点/Kubernetes 部署命令
+- ✅ **环境变量调优**：NCCL、RDMA、Mooncake 配置参数
+
+**Statistics（统计数据）**
+- 📊 新增章节数：2 个（PD 分离 + AI 网关）
+- 📊 新增内容字数：~8000 字
+- 📊 生产案例数：3 个（128/96/72 GPU 规模）
+- 📊 配置代码块数：15+ 个完整示例
+
+**Impact（影响）**
+- ✅ 填补生产部署真实案例空白
+- ✅ 提供顶级部署的配置参考（Kimi K2、DeepSeek）
+- ✅ 明确成本数据（$0.20-0.21/百万 tokens）
+- ✅ 覆盖 NVIDIA H100/H200/GB200、AMD MI300X 硬件
+
+---
+
 ### [v3.0] - 2026-02-12 ✅ **Phase 6-8 完成（全目录文档增强 + 中文化）**
 
 **Completed（已完成）**
@@ -1068,7 +1093,7 @@ M python/sglang/srt/server_args.py
 ---
 
 **最后更新**：2026年2月12日
-**文档版本**：v3.1（Phase 1-8 + 全量中英对照完成）
+**文档版本**：v3.2（Phase 1-8 + 全量中英对照 + 生产部署案例完成）
 **维护者**：Claude Opus 4.6 (AI Assistant)
 
 ---
@@ -1105,7 +1130,19 @@ English paragraph here.
 **中文对照**：对应的中文翻译。
 ```
 
-### v3.2（规划中）：diffusion_models.md 独立子系统增强
+### v3.2（已完成）✅：生产部署案例增强
+
+**背景**：learning-guide/12-production-deployment.md 缺少真实生产部署案例和 PD 分离/AI 网关详细说明。
+
+**状态**：✅ **已完成 - 2026-02-12**
+
+**完成工作量**：
+- 📊 新增 2 个章节（PD 分离 + AI 网关）
+- 📊 提取 3 个顶级生产案例（Kimi K2、DeepSeek、GB200）
+- 📊 新增 ~8000 字内容
+- 📊 15+ 个完整配置示例
+
+### v3.3（规划中）：diffusion_models.md 独立子系统增强
 
 **背景**：`docs/supported_models/image_generation/diffusion_models.md`（1284行）是独立的扩散子系统文档，未在 Phase 8 增强。
 
