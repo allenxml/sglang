@@ -17,6 +17,18 @@ or [NeuralMagic](https://huggingface.co/collections/neuralmagic) collections on 
 popular quality validated quantized models. Quantized models must be validated via benchmarks post-quantization
 to guard against abnormal quantization loss regressions.
 
+**中文对照**：# 量化
+
+SGLang 支持多种量化方法，包括离线量化和在线动态量化。
+
+离线量化在推理期间直接加载预量化模型权重。这是 GPTQ 和 AWQ 等量化方法所需要的，这些方法使用校准数据集从原始权重中收集和预计算各种统计信息。
+
+在线量化在运行时动态计算缩放参数——如模型权重的最大值/最小值。与 NVIDIA FP8 训练的[延迟缩放](https://docs.nvidia.com/deeplearning/transformer-engine/user-guide/examples/fp8_primer.html#Mixed-precision-training-with-FP8)机制类似，在线量化即时计算适当的缩放因子，将高精度权重转换为低精度格式。
+
+**注意：为了更好的性能、易用性和便利性，建议使用离线量化而不是在线量化。**
+
+如果您使用预量化模型，请不要同时添加 `--quantization` 来启用在线量化。对于流行的预量化模型，请访问 HF 上的 [Unsloth](https://huggingface.co/unsloth)、[NVIDIA ModelOpt](https://huggingface.co/collections/nvidia/inference-optimized-checkpoints-with-model-optimizer) 或 [NeuralMagic](https://huggingface.co/collections/neuralmagic) 集合，获取一些经过质量验证的流行量化模型。量化后的模型必须通过基准测试验证，以防止异常的量化损失回归。
+
 ## Offline Quantization
 
 To load already quantized models, simply load the model weights and config. **Again, if the model has been quantized offline,
@@ -466,3 +478,36 @@ Other layers (e.g. projections in the attention layers) have their weights quant
 - [Torchao: PyTorch Architecture Optimization](https://github.com/pytorch/ao)
 - [vLLM Quantization](https://docs.vllm.ai/en/latest/quantization/)
 - [auto-round](https://github.com/intel/auto-round)
+
+## 代码实现
+
+### 核心文件
+量化逻辑主要位于 `python/sglang/srt/layers/quantization/`。关键文件包括：
+- `base_config.py`: 定义 `QuantizationConfig` 和 `QuantizeMethodBase` 抽象基类。
+- `fp8.py` 和 `fp8_kernel.py`: FP8 量化的实现及其相关的 CUDA 内核。
+- `awq.py` 和 `gptq.py`: AWQ 和 GPTQ 纯权重量化的集成。
+- `w8a8_fp8.py` 和 `w8a8_int8.py`: 每 token 动态激活量化的实现。
+
+### 架构
+SGLang 的量化架构遵循工厂模式。当模型初始化时，会根据模型的配置或服务器参数实例化 `QuantizationConfig`。然后该配置为每一层提供适当的 `QuantizeMethodBase`（例如 `LinearMethodBase` 或 `FusedMoEMethodBase`）。该架构解耦了权重加载、内存分配（量化参数的创建）和实际计算（GEMM/前向传播），使得新内核和格式的集成变得容易。
+
+### 关键代码逻辑
+- **QuantizationConfig**: 检测和配置量化方法的入口点。
+  ```python
+  class QuantizationConfig(ABC):
+      @abstractmethod
+      def get_quant_method(self, layer: torch.nn.Module, prefix: str) -> Optional[QuantizeMethodBase]:
+          pass
+  ```
+- **QuantizeMethodBase**: 定义如何创建权重以及如何执行前向传播（apply）。
+  ```python
+  class LinearMethodBase(QuantizeMethodBase):
+      @abstractmethod
+      def apply(self, layer: torch.nn.Module, x: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
+          pass
+  ```
+
+### 集成要点
+- **模型加载**: `python/sglang/srt/model_loader/loader.py` 使用量化配置来确定如何加载和处理权重。
+- **模型定义**: `python/sglang/srt/models/` 中的模型使用 `QuantizationConfig` 包装线性层和 MoE 层。
+- **内核调度**: 来自 `sgl-kernel` 或 Triton 的自定义内核在特定量化实现的 `apply` 方法中被调用。

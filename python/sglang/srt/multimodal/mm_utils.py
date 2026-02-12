@@ -12,6 +12,39 @@
 # limitations under the License.
 # ==============================================================================
 
+# ============================================================================
+# 多模态工具函数 (Multimodal Utilities)
+# ============================================================================
+#
+# 【文件功能 What】
+# 为视觉-语言模型（VLM）提供图像预处理和编码工具
+# Provides image preprocessing and encoding utilities for Vision-Language Models (VLM)
+#
+# 【核心比喻 Metaphor】
+# 就像一个"图像翻译器"，将人类的图片转换为模型能理解的数字形式
+# Like an "image translator" that converts human images into numerical form that models understand
+# - 原始图片 → 缩放/裁剪/分块 → 张量编码 → 视觉特征
+#   Raw image → resize/crop/tile → tensor encoding → visual features
+#
+# 【主要功能 Key Functions】
+# 1. 图像加载: load_image_from_base64() - 从base64字符串加载图片
+#    Image loading: loads images from base64 strings
+# 2. Anyres处理: select_best_resolution() - 自适应分辨率选择
+#    Anyres processing: adaptive resolution selection for better quality
+# 3. 图像分块: split_to_patches() - 将大图分成多个patch
+#    Image tiling: splits large images into multiple patches
+# 4. 视频处理: extract_video_frames() - 视频帧提取
+#    Video processing: extracts frames from video inputs
+#
+# 【技术特点 Technical Features】
+# - 支持多种VLM: LLaVA-NeXT, Qwen2-VL, InternVL等
+#   Supports multiple VLMs
+# - Anyres优化: 动态选择最佳分辨率，减少信息损失
+#   Anyres optimization: dynamically selects best resolution to minimize info loss
+# - CUDA加速: 高效的张量操作和批处理
+#   CUDA acceleration: efficient tensor operations and batching
+# ============================================================================
+
 # Source: https://github.com/LLaVA-VL/LLaVA-NeXT/blob/main/llava/mm_utils.py
 """
 Utilities for multi-modal models.

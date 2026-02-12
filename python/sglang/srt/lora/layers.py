@@ -1,3 +1,45 @@
+# ============================================================================
+# LoRA 层实现 (LoRA Layers) - 低秩适配的数学核心
+# ============================================================================
+#
+# 【文件功能 What】
+# 实现 LoRA (Low-Rank Adaptation) 的数学运算和层封装
+# Implements mathematical operations and layer wrappers for LoRA (Low-Rank Adaptation)
+#
+# 【核心比喻 Metaphor】
+# 就像"给西装加补丁"：
+# Like "adding patches to a suit":
+# - 基座模型的权重 W = 原装西装（大且不可改）
+#   Base model weights W = original suit (large and immutable)
+# - LoRA的 A、B矩阵 = 小补丁（轻便且可更换）
+#   LoRA's A, B matrices = small patches (lightweight and swappable)
+# - 最终输出 = 原装 + 补丁效果：y = Wx + BAx
+#   Final output = original + patch effect: y = Wx + BAx
+#
+# 【LoRA数学原理 LoRA Mathematics】
+# 传统微调：更新整个权重矩阵 W (d × d) → 需要存储 d² 个参数
+# Traditional fine-tuning: update entire weight matrix W (d × d) → needs d² parameters
+#
+# LoRA方法：冻结W，只训练两个小矩阵 A (d × r) 和 B (r × d)
+# LoRA approach: freeze W, only train two small matrices A (d × r) and B (r × d)
+# - r << d (如 r=8, d=4096)，参数量减少 512倍！
+#   r << d (e.g., r=8, d=4096), 512x fewer parameters!
+# - 前向传播：y = Wx + s·BAx （s=缩放因子 scaling factor）
+#   Forward pass: y = Wx + s·BAx (s = scaling factor)
+#
+# 【为什么有效 Why It Works】
+# 神经网络的更新矩阵ΔW往往是低秩的（"内在维度假说"）
+# Update matrix ΔW is often low-rank ("intrinsic dimensionality hypothesis")
+# LoRA用 BA 近似 ΔW，捕获主要变化方向
+# LoRA uses BA to approximate ΔW, capturing main change directions
+#
+# 【核心类 Key Classes】
+# - BaseLayerWithLoRA: LoRA层的抽象基类
+# - ColumnParallelLinearWithLoRA: 列并行线性层 + LoRA
+# - RowParallelLinearWithLoRA: 行并行线性层 + LoRA
+# - VocabParallelEmbeddingWithLoRA: 词嵌入层 + LoRA
+# ============================================================================
+
 from typing import Optional
 
 import torch
@@ -24,6 +66,21 @@ from sglang.srt.lora.backend.base_backend import BaseLoRABackend
 from sglang.srt.lora.utils import LoRABatchInfo
 
 
+# ============================================================================
+# BaseLayerWithLoRA - LoRA层的基类
+# ============================================================================
+# 【核心功能】
+# 封装原始层（base_layer）并添加LoRA权重的计算逻辑
+# Wraps original layer (base_layer) and adds LoRA weight computation logic
+#
+# 【前向传播流程】
+# 1. 计算基座输出：base_output = base_layer(x)
+#    Compute base output
+# 2. 如果有LoRA：lora_output = lora_backend.apply(x, A, B)
+#    If LoRA exists: compute LoRA output
+# 3. 合并结果：final_output = base_output + scaling * lora_output
+#    Merge results
+# ============================================================================
 class BaseLayerWithLoRA(nn.Module):
     def __init__(
         self,

@@ -11,6 +11,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# ====================================================================
+# 📚 学习导读：张量并行工作器（TpWorker）
+# ====================================================================
+#
+# 【这个文件是做什么的？】
+# TpWorker（Tensor Parallel Worker）是连接 Scheduler 和 ModelRunner 的桥梁。
+# 当模型太大、需要多块 GPU 时，每块 GPU 上都有一个 TpWorker，
+# 它们协同完成一次前向传播。
+#
+# 【生活比喻】
+# 想象烤一个超大蛋糕：
+# - 蛋糕太大，一个烤箱放不下（模型太大，一块 GPU 装不下）
+# - 把蛋糕切成几份，分别放在不同烤箱里烤（张量并行）
+# - TpWorker 就是每个烤箱旁边的烘焙师，负责自己那份
+# - 烤好后大家把结果拼在一起（AllReduce 通信）
+#
+# 【核心职责】
+# - 创建和管理 ModelRunner（实际执行 GPU 计算的组件）
+# - 执行前向传播（forward_batch_generation / forward_batch_idle）
+# - 多 GPU 间的通信协调
+#
+# 【在推理流程中的位置】
+# Scheduler → 【TpWorker】→ ModelRunner → GPU 计算
+#
+# 【阅读建议】
+# 1. 先看 __init__() 了解 TpWorker 如何初始化 ModelRunner
+# 2. 再看 forward 相关方法了解它如何调用模型
+# ====================================================================
 """A tensor parallel worker."""
 from __future__ import annotations
 
@@ -56,7 +84,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# 基础工作器抽象类（BaseTpWorker）
+# 好比一份"烘焙师岗位说明书"，定义了每个烘焙师必须会的技能：
+# 前向推理、权重更新、LoRA 适配器管理等。
+# 具体怎么做，由子类 TpModelWorker 来实现。
+# ---------------------------------------------------------------------------
 class BaseTpWorker(ABC):
+    # 抽象方法：前向推理生成——子类必须实现的"核心烘焙技能"
     @abstractmethod
     def forward_batch_generation(self, forward_batch: ForwardBatch):
         pass
@@ -89,6 +124,7 @@ class BaseTpWorker(ABC):
             self.model_runner.token_to_kv_pool_allocator,
         )
 
+    # 从磁盘加载/更新模型权重——好比给烤箱换一套新的模具
     def update_weights_from_disk(self, recv_req: UpdateWeightFromDiskReqInput):
         success, message = self.model_runner.update_weights_from_disk(
             recv_req.model_path,
@@ -139,6 +175,7 @@ class BaseTpWorker(ABC):
         )
         return success, message
 
+    # 从分布式通信组更新权重——多个烘焙师通过"传送带"同步换新模具
     def update_weights_from_distributed(
         self, recv_req: UpdateWeightsFromDistributedReqInput
     ):
@@ -151,6 +188,7 @@ class BaseTpWorker(ABC):
         )
         return success, message
 
+    # 从张量直接更新权重——直接把新模具"递到手里"，不经过磁盘
     def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
 
         monkey_patch_torch_reductions()
@@ -162,17 +200,21 @@ class BaseTpWorker(ABC):
         )
         return success, message
 
+    # 通过 IPC（进程间通信）更新权重——同一台机器上的进程间"隔墙传递"模具
     def update_weights_from_ipc(self, recv_req: UpdateWeightsFromIPCReqInput):
         """Update weights from IPC for checkpoint-engine integration."""
         success, message = self.model_runner.update_weights_from_ipc(recv_req)
         return success, message
 
+    # 按名字获取模型权重——好比查阅食谱中某一步用到的具体配料
     def get_weights_by_name(self, recv_req: GetWeightsByNameReqInput):
         parameter = self.model_runner.get_weights_by_name(
             recv_req.name, recv_req.truncate_size
         )
         return parameter
 
+    # 加载 LoRA 适配器——好比给蛋糕模具加一层可拆卸的花纹装饰
+    # LoRA 是一种轻量微调方法，不改变原始模型，只加一层小巧的"装饰"
     def load_lora_adapter(self, recv_req: LoadLoRAAdapterReqInput):
         result = self.model_runner.load_lora_adapter(recv_req.to_ref())
         return result
@@ -195,6 +237,7 @@ class BaseTpWorker(ABC):
         )
         return result
 
+    # 前向推理：提取嵌入向量——不生成文字，只获取文本的"数字指纹"
     def forward_batch_embedding(self, model_worker_batch: ModelWorkerBatch):
         forward_batch = ForwardBatch.init_new(model_worker_batch, self.model_runner)
         logits_output = self.model_runner.forward(forward_batch).logits_output
@@ -202,9 +245,18 @@ class BaseTpWorker(ABC):
         return embeddings
 
 
+# ---------------------------------------------------------------------------
+# 核心实现类：TpModelWorker（张量并行模型工作器）
+# 这是真正"上岗干活"的烘焙师。它继承了 BaseTpWorker 的岗位说明书，
+# 负责：初始化 GPU 上的 ModelRunner、执行前向推理、采样下一个 token。
+# 每块 GPU 上运行一个 TpModelWorker 实例。
+# ---------------------------------------------------------------------------
 class TpModelWorker(BaseTpWorker):
     """A tensor parallel model worker."""
 
+    # 初始化方法：烘焙师正式上岗前的准备工作
+    # 包括：确认自己负责哪块 GPU（gpu_id）、在团队中的编号（tp_rank）、
+    # 创建 ModelRunner（真正的计算引擎）、加载 tokenizer、同步随机种子等
     def __init__(
         self,
         server_args: ServerArgs,
@@ -301,6 +353,7 @@ class TpModelWorker(BaseTpWorker):
         self.enable_spec = server_args.speculative_algorithm is not None
         self.hicache_layer_transfer_counter = None
 
+    # 加载模型配置——先看清"蛋糕的食谱"，了解模型结构、参数规模等
     def _init_model_config(self):
         from sglang.srt.configs.model_config import ModelConfig
 
@@ -319,6 +372,8 @@ class TpModelWorker(BaseTpWorker):
             is_draft_model=self.is_draft_worker,
         )
 
+    # 初始化 ModelRunner——真正的"烤箱"启动了！
+    # ModelRunner 负责在 GPU 上加载模型权重、分配显存、执行计算
     def _init_model_runner(self):
         from sglang.srt.model_executor.model_runner import ModelRunner
 
@@ -341,6 +396,9 @@ class TpModelWorker(BaseTpWorker):
             draft_model_idx=0 if self.is_multi_layer_eagle else None,
         )
 
+    # 初始化多层 EAGLE 投机解码的草稿模型运行器列表
+    # EAGLE 是一种加速推理的技术——好比让多个"学徒"先快速草拟答案，
+    # 再由"师傅"（主模型）逐一验证
     def _init_multi_layer_eagle_model_runners(self):
         from sglang.srt.model_executor.model_runner import ModelRunner
 
@@ -405,6 +463,7 @@ class TpModelWorker(BaseTpWorker):
     def is_dllm(self):
         return self.dllm_algorithm is not None
 
+    # DLLM（Draft Large Language Model）前向推理——使用草稿模型加速生成
     def _forward_batch_generation_dllm(
         self, forward_batch: ForwardBatch
     ) -> GenerationBatchResult:
@@ -423,6 +482,14 @@ class TpModelWorker(BaseTpWorker):
             self.model_runner.remote_instance_transfer_engine_weight_info,
         )
 
+    # ---------------------------------------------------------------
+    # 核心方法：前向推理生成（forward_batch_generation）
+    # 这是烘焙师的"主要工作流程"：
+    # 1. 把一批请求打包成 ForwardBatch
+    # 2. 调用 ModelRunner 执行前向传播，得到 logits（每个词的概率分布）
+    # 3. 采样（sample）得到下一个 token
+    # 如果是流水线并行（Pipeline Parallel）的非最后一级，只传递隐藏状态
+    # ---------------------------------------------------------------
     def forward_batch_generation(
         self,
         model_worker_batch: ModelWorkerBatch,
@@ -515,6 +582,8 @@ class TpModelWorker(BaseTpWorker):
                 expert_distribution_metrics=out.expert_distribution_metrics,
             )
 
+    # 分片预填充（Split Prefill）——当输入太长时，把预填充阶段切成多块分步执行
+    # 好比超长的面团一次擀不完，分几次擀平
     def forward_batch_split_prefill(self, batch: ScheduleBatch):
         if batch.split_index == 0:
             model_worker_batch = batch.get_model_worker_batch()

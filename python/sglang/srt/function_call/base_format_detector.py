@@ -1,3 +1,25 @@
+# ============================================================================
+# Function Call Format Detector - 函数调用格式检测器
+# ============================================================================
+# What - 是什么:
+#   Format detector for function calling across different LLM models
+#   检测模型使用的函数调用格式（不同模型有不同的格式规范）
+#
+#   像"翻译器"：每个模型有自己的"方言"来表达工具调用，检测器识别是哪种方言
+#
+# Technical - 技术实现:
+#   Provides abstract base interface for format detection and parsing
+#   提供格式检测的抽象基础接口
+#   - One-time parsing: detect_and_parse() for complete responses
+#   - Streaming parsing: parse_streaming_increment() for real-time chunks
+#
+# Why - 为什么需要:
+#   Enables multi-model support for tool calling functionality
+#   使工具调用功能支持多种模型
+#   Different models use different syntaxes (JSON arrays vs XML-like tags)
+#   不同模型使用不同语法（JSON数组 vs XML标签等）
+# ============================================================================
+
 import json
 import logging
 from abc import ABC, abstractmethod
@@ -23,6 +45,9 @@ from sglang.srt.function_call.utils import (
 logger = logging.getLogger(__name__)
 
 
+# 抽象基类：定义格式检测的统一接口
+# Abstract base class that defines unified interface for format detection
+# 子类实现特定模型的格式识别逻辑（如Mistral、Qwen等）
 class BaseFormatDetector(ABC):
     """Base class providing two sets of interfaces: one-time and streaming incremental."""
 

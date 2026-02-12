@@ -2,6 +2,10 @@
 
 SGLang Model Gateway is a high-performance model-routing gateway for large-scale LLM deployments. It centralizes worker lifecycle management, balances traffic across heterogeneous protocols (HTTP, gRPC, OpenAI-compatible), and provides enterprise-ready control over history storage, MCP tooling, and privacy-sensitive workflows. The gateway is deeply optimized for the SGLang serving runtime, but can route to any OpenAI-compatible backend.
 
+**中文对照**：# SGLang 模型网关
+
+SGLang 模型网关是一个高性能的模型路由网关，用于大规模 LLM 部署。它集中管理 worker 生命周期，平衡异构协议（HTTP、gRPC、OpenAI 兼容）的流量，并提供企业级的历史存储、MCP 工具和隐私敏感工作流控制。该网关针对 SGLang 服务运行时进行了深度优化，但可以路由到任何 OpenAI 兼容的后端。
+
 ---
 
 ## Table of Contents
@@ -1723,3 +1727,36 @@ Check HuggingFace Hub credentials (`HF_TOKEN` environment variable) for private 
 ---
 
 SGLang Model Gateway continues to evolve alongside the SGLang runtime. Keep CLI flags, integrations, and documentation aligned when adopting new features or contributing improvements.
+
+## 代码实现
+
+### 核心文件
+SGLang Model Gateway 使用 Rust 实现，以获得高性能和并发性。源代码位于 `sgl-model-gateway/src/` 目录：
+- `core/worker_manager.rs` 和 `worker_registry.rs`: 管理后端的生命周期、注册和健康监控。
+- `policies/cache_aware.rs`: 实现核心的 RadixCache 感知路由逻辑，用于前缀局部性。
+- `routers/router_manager.rs`: 编排多个路由栈（HTTP、gRPC、OpenAI）。
+- `server.rs`: 基于 Actix-web/tonic 的网关服务器的入口点。
+
+### 架构
+网关遵循解耦的**控制平面**和**数据平面**架构。控制平面（WorkerManager）处理服务发现、后台健康检查和负载监控，使用作业队列来序列化状态更新。数据平面由专用路由器（HTTP、gRPC、OpenAI）组成，这些路由器使用 `LoadBalancer` 根据可插拔策略选择 worker。该架构使用异步、非阻塞 I/O 模型（Tokio）以最小的开销处理数千个并发请求。
+
+### 关键代码逻辑
+- **Worker 注册**: 通过控制平面动态注册 worker。
+  ```rust
+  pub async fn register_worker(&self, config: WorkerConfig) -> Result<WorkerId> {
+      let worker = WorkerBuilder::new(config).build().await?;
+      self.registry.add(worker).await
+  }
+  ```
+- **策略选择**: 可插拔的负载均衡逻辑。
+  ```rust
+  pub trait LoadBalancePolicy: Send + Sync {
+      fn select_worker(&self, request: &Request, workers: &[Worker]) -> Option<WorkerId>;
+  }
+  ```
+
+### 集成要点
+- **上游 SGLang**: 通过 REST 或 gRPC（`sgl_scheduler.proto`）与 SGLang worker 通信。
+- **Kubernetes**: 使用 `service_discovery.rs` 模块监视 Kubernetes API，根据选择器检测 pod 变化。
+- **中间件**: 基于 WASM 的可插拔中间件和 Rust 原生拦截器，用于身份验证和可观测性。
+- **历史存储**: 用于持久化对话上下文的 PostgreSQL、Redis 和 Oracle ATP 连接器。

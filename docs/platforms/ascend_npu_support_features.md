@@ -6,6 +6,12 @@ questions, please [open an issue](https://github.com/sgl-project/sglang/issues).
 If you want to know the meaning and usage of each parameter,
 click [Server Arguments](https://docs.sglang.io/advanced_features/server_arguments.html).
 
+**中文对照**：# Ascend NPU 支持的功能
+
+本节介绍 Ascend NPU 支持的基本功能和特性。如果您遇到任何问题或有疑问，请[提交 issue](https://github.com/sgl-project/sglang/issues)。
+
+如果您想了解每个参数的含义和用法，请点击[服务器参数](https://docs.sglang.io/advanced_features/server_arguments.html)。
+
 ## Model and tokenizer
 
 | Argument                               | Defaults | Options                               | Server supported |
@@ -485,3 +491,30 @@ The following parameters have some functional deficiencies on community
 | `--ds-heavy-channel-type`             | `qk`     | Type: str                      |
 | `--ds-sparse-decode-`<br/>`threshold` | `4096`   | Type: int                      |
 | `--tool-server`                       | `None`   | Type: str                      |
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/server_args.py` | ServerArgs：定义上述所有 CLI 参数；NPU 支持状态由硬件后端确定 |
+| `python/sglang/srt/hardware_backend/npu/` | Ascend NPU 硬件后端：为支持的参数实现 NPU 专用内核 |
+| `python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py` | Ascend 注意力后端：`--attention-backend ascend` 实现 |
+| `python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py` | NPU 图运行器：Ascend 上的 `--cuda-graph-bs` 和 `--cuda-graph-max-bs` |
+| `python/sglang/srt/hardware_backend/npu/quantization/fused_moe_method_npu.py` | NPU MoE 量化：`--quantization modelslim` 支持 |
+| `python/sglang/srt/lora/backend/ascend_backend.py` | NPU 上的 LoRA：`--enable-lora --lora-backend triton` 实现 |
+
+### 关键代码逻辑
+
+- **特性控制**：标记为"A2, A3"的参数经过验证并分发到 `hardware_backend/npu/` 中的 NPU 专用实现
+- **"Special for GPU"参数**：这些参数使用仅限 CUDA 的库（FlashInfer、CUTLASS 等），在 NPU 上不可用
+- **注意力后端**：NPU 仅支持 `ascend` 后端；GPU 专用后端（FlashInfer、Triton、FA3）不可用
+- **采样后端**：`--sampling-backend ascend` 提供 NPU 优化的 top-k/top-p 采样
+
+### 集成要点
+
+- **服务器参数**：所有参数在 `server_args.py` 中定义；运行时通过设备检测检查 NPU 兼容性
+- **硬件后端插件**：`hardware_backend/npu/` 目录遵循 SGLang 的模块化后端模式用于设备特定代码
+- **推测解码**：A2/A3 上支持 EAGLE3 和 NEXTN；使用 `eagle_draft_npu_graph_runner.py` 作为草稿模型
+- **PD 分离**：`--disaggregation-transfer-backend ascend` 在 NPU 上使用 MemFabric-Hybrid 而非 Mooncake

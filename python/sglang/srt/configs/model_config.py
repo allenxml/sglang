@@ -12,6 +12,59 @@
 # limitations under the License.
 # ==============================================================================
 
+# ================================================================================
+# ⚙️ 模型架构配置 (Model Config)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 这个文件定义了模型架构的配置类（ModelConfig），描述模型的数学结构参数（层数、隐藏维度、
+# 注意力头数等），并从 HuggingFace config.json 自动解析这些参数。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"汽车设计图纸"：
+# - ModelConfig = 设计图纸（规格参数）
+# - hidden_size = 发动机功率（模型表达能力）
+# - num_layers = 变速箱档位数（模型深度）
+# - num_attention_heads = 轮胎数量（并行计算能力）
+# - vocab_size = 车内按钮数量（词汇表大小）
+#
+# 【核心参数】Key Parameters
+# 1. 基础架构：
+#    - hidden_size: 隐藏层维度（如 4096）
+#    - num_hidden_layers: Transformer 层数（如 32）
+#    - num_attention_heads: 注意力头数（如 32）
+#    - vocab_size: 词汇表大小（如 128256）
+#
+# 2. 位置编码：
+#    - max_position_embeddings: 最大上下文长度
+#    - rope_theta: RoPE 位置编码参数
+#    - rope_scaling: RoPE 缩放策略（用于长文本）
+#
+# 3. 多模态：
+#    - vision_config: 视觉编码器配置（VLM 模型）
+#    - mm_projector_config: 多模态投影层配置
+#
+# 4. 量化：
+#    - quantization: 量化方法（awq, gptq, fp8 等）
+#    - quantization_config: 量化参数
+#
+# 5. MoE（专家混合）：
+#    - num_experts: 专家数量
+#    - num_experts_per_tok: 每个 token 激活的专家数
+#
+# 【自动检测】Auto-detection
+# - 从 config.json 自动解析参数
+# - 支持 LLaMA、Qwen、Mistral、DeepSeek 等主流模型
+# - 处理各模型的特殊配置（如 Mistral 的 sliding_window）
+#
+# 【使用示例】Usage
+# ModelConfig 会自动从模型路径加载：
+#   model_config = ModelConfig(model_path="meta-llama/Llama-3.1-70B")
+#   print(model_config.hidden_size)  # 8192
+#   print(model_config.num_hidden_layers)  # 80
+#
+# ================================================================================
+
 import json
 import logging
 import math
@@ -23,7 +76,7 @@ from typing import Any, List, Optional, Set, Union
 import torch
 from transformers import PretrainedConfig
 
-from sglang.srt.environ import envs
+from sglang.srt.environ import envs  # 环境变量配置
 from sglang.srt.layers.quantization import QUANTIZATION_METHODS
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import is_hip, is_sm100_supported, retry

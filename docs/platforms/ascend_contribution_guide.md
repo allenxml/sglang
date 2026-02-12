@@ -1,6 +1,10 @@
 # Contribution Guide
 
-Welcome to **SGLang**! We appreciate your interest in contributing. This guide provides a concise overview of how to set up your environment, run tests, build documentation, and open a Pull Request (PR). Whether you’re fixing a small bug or developing a major feature, we encourage following these steps for a smooth contribution process.
+Welcome to **SGLang**! We appreciate your interest in contributing. This guide provides a concise overview of how to set up your environment, run tests, build documentation, and open a Pull Request (PR). Whether you're fixing a small bug or developing a major feature, we encourage following these steps for a smooth contribution process.
+
+**中文对照**：# 贡献指南
+
+欢迎使用 **SGLang**！感谢您有兴趣贡献力量。本指南简要概述了如何设置环境、运行测试、构建文档以及打开 Pull Request (PR)。无论是修复小错误还是开发主要功能，我们都鼓励您遵循这些步骤以获得顺畅的贡献流程。
 
 ## Install SGLang from Source
 
@@ -83,13 +87,13 @@ For CI to run on a pull request, it must have the "run-ci" label. Authorized use
 - `/tag-and-rerun-ci`: A single command that performs both `/tag-run-ci-label` and `/rerun-failed-ci`.
 - `/rerun-stage <stage-name>`: Reruns a specific test stage without waiting for its dependencies. This is useful when you want to quickly validate a fix for a specific test failure instead of waiting ~30 minutes for preceding stages to complete.
 
-If you have permission, the [Slash Command Handler](https://github.com/sgl-project/sglang/actions/workflows/slash-command-handler.yml) will run your command and react with a 👍 to your comment. It may take up to a few minutes for the reaction to appear. Here’s a usage [example](https://github.com/sgl-project/sglang/pull/14253#issuecomment-3599509302).
+If you have permission, the [Slash Command Handler](https://github.com/sgl-project/sglang/actions/workflows/slash-command-handler.yml) will run your command and react with a 👍 to your comment. It may take up to a few minutes for the reaction to appear. Here's a usage [example](https://github.com/sgl-project/sglang/pull/14253#issuecomment-3599509302).
 
 To avoid spamming a PR with too many `/rerun-failed-ci` comments, you can also trigger the command by editing an existing comment and adding any suffix (e.g., `/rerun-failed-ci try again`).
 
 Example of rerunning a single test stage: `/rerun-stage unit-test-backend-4-gpu`.
 
-If you don’t have permission, please ask maintainers to trigger CI for you.
+If you don't have permission, please ask maintainers to trigger CI for you.
 
 ### CI rate limits
 
@@ -106,7 +110,7 @@ cool-down-minutes:
   default: 120
 ```
 
-Users listed in [CI_PERMISSIONS.json](https://github.com/sgl-project/sglang/blob/main/.github/CI_PERMISSIONS.json) may have a per-user cooldown interval. In practice, we use the minimum of the workflow’s default window and the user-specific interval.
+Users listed in [CI_PERMISSIONS.json](https://github.com/sgl-project/sglang/blob/main/.github/CI_PERMISSIONS.json) may have a per-user cooldown interval. In practice, we use the minimum of the workflow's default window and the user-specific interval.
 
 
 ## Code style guidance
@@ -145,8 +149,26 @@ Sgl-kernel-npu is the kernel package for Ascend NPU and is maintained in the [sg
 
 ## Tips for newcomers
 
-If you want to contribute but don’t have a specific idea in mind, pick issues labeled [“good first issue” or “help wanted”](https://github.com/sgl-project/sglang/issues?q=is%3Aissue+label%3A%22good+first+issue%22%2C%22help+wanted%22). These tasks typically have lower complexity and provide an excellent introduction to the codebase. Also check out this [code walk-through](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/tree/main/sglang/code-walk-through) for a deeper look into SGLang’s workflow.
+If you want to contribute but don't have a specific idea in mind, pick issues labeled ["good first issue" or "help wanted"](https://github.com/sgl-project/sglang/issues?q=is%3Aissue+label%3A%22good+first+issue%22%2C%22help+wanted%22). These tasks typically have lower complexity and provide an excellent introduction to the codebase. Also check out this [code walk-through](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/tree/main/sglang/code-walk-through) for a deeper look into SGLang's workflow.
 
 If you have any questions or want to start a discussion, please feel free to ask in our [Slack channel](https://slack.sglang.io).
 
 Thank you for your interest in SGLang. Happy coding!
+
+## 代码实现
+
+### Ascend 贡献者核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/hardware_backend/npu/` | Ascend NPU 硬件后端 — 在此添加新的 NPU 专用组件 |
+| `python/sglang/srt/layers/utils/multi_platform.py` | 平台抽象 — 在此添加 NPU 检测分支 |
+| `test/srt/` | 后端测试目录 — 在此添加 NPU 专用测试 |
+| `sgl-kernel-npu/` | Ascend NPU 内核的独立仓库（类似 CUDA 的 sgl-kernel） |
+
+### 关键开发模式
+
+- **硬件后端隔离**：所有 NPU 代码位于 `hardware_backend/npu/`；优先使用新文件（例如 `allocator_npu.py`）而非修改共享代码
+- **sgl-kernel-npu 更新**：独立仓库位于 `sgl-project/sgl-kernel-npu`；遵循其自己的[贡献指南](https://github.com/sgl-project/sgl-kernel-npu/blob/main/docs/developer_guide/contribution_guide.md)
+- **代码风格**：通用路径（NVIDIA）必须是 if/else 块中的第一个分支；NPU 专用分支在其后
+- **测试**：使用 `test_moe_eval_accuracy_large.py` 在 NPU 上验证 MoE 模型准确性

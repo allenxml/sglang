@@ -12,6 +12,43 @@
 # limitations under the License.
 # ==============================================================================
 
+# ============================================================================
+# LoRA 管理器 (LoRA Manager) - 动态适配器编排系统
+# ============================================================================
+#
+# 【文件功能 What】
+# 管理和调度多个 LoRA 适配器的并发服务
+# Manages and schedules concurrent serving of multiple LoRA adapters
+#
+# 【核心比喻 Metaphor】
+# 就像一个"演员更衣室管理系统"：
+# Like a "costume room management system" for actors:
+# - 基座模型 = 演员本身（固定不变）
+#   Base model = the actor itself (fixed)
+# - LoRA适配器 = 不同的服装/道具（可快速更换）
+#   LoRA adapters = different costumes/props (quickly swappable)
+# - 一个演员穿不同服装 = 同一模型应用不同LoRA，扮演不同角色
+#   One actor with different costumes = same model with different LoRAs, playing different roles
+# - 更衣室管理 = LoRAManager 调度哪个请求用哪个适配器
+#   Costume management = LoRAManager schedules which request uses which adapter
+#
+# 【为什么需要 Why】
+# 1. 多租户场景：一个基座模型服务多个客户的定制需求
+#    Multi-tenant: one base model serves multiple clients' custom needs
+# 2. 内存高效：只需加载基座一次，LoRA权重很小（<1% 模型大小）
+#    Memory efficient: load base once, LoRA weights are tiny (<1% model size)
+# 3. 动态切换：请求间可以无缝切换不同LoRA，无需重新加载模型
+#    Dynamic switching: seamlessly switch LoRAs between requests without reloading model
+#
+# 【技术基础 Technical Foundation】
+# 整合了两篇顶会论文的技术：
+# Integrates techniques from two top-tier papers:
+# - S-LoRA (SOSP'23): Serving Thousands of Concurrent LoRA Adapters
+# - Punica (MLSys'23): Multi-Tenant LoRA Serving
+#
+# 【核心类】LoRAManager - 适配器生命周期管理
+# ============================================================================
+
 # Integrates "S-LoRA: Serving Thousands of Concurrent LoRA Adapters"
 # and "Punica: Multi-Tenant LoRA Serving"
 

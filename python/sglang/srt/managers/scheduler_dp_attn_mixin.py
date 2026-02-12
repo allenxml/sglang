@@ -1,3 +1,36 @@
+# ================================================================================
+# 🔗 DP 注意力调度混入类 (Scheduler DP Attention Mixin)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 这个文件定义了在 Data Parallelism（DP）环境下，调度器如何协调多个 DP rank 之间的
+# 注意力计算，特别是处理跨 DP rank 的批次同步和 MLP 层的协作计算。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"多分店协作系统"：
+# - 各分店（DP ranks）独立处理订单（请求）
+# - 但某些环节需要协作（如统一采购原料 = MLP 同步）
+# - 总部协调员（DPAttentionMixin）负责同步各分店的状态
+# - All-Gather = 各分店报告自己的情况，汇总到总部
+#
+# 【核心功能】Key Features
+# 1. DP 批次同步：确保各 DP rank 的批次信息一致
+# 2. MLP 层协作：在 TP 环境下，DP ranks 需要协作完成 MLP 计算
+# 3. Two-Batch Overlap (TBO)：支持 Prefill 和 Decode 批次重叠执行
+# 4. 性能指标：记录 DP 协作的通信开销
+#
+# 【技术细节】Technical Details
+# - All-Gather: 所有 DP ranks 交换批次信息（token 数、forward mode 等）
+# - MLP Sync: 在 MLP 层同步梯度（仅在 TP 环境下需要）
+# - CUDA Graph: 协调 CUDA Graph 的捕获和回放
+#
+# 【适用场景】Use Cases
+# - DP + TP 混合并行（如 DP=2, TP=4）
+# - 大批次推理（需要 DP 分流）
+# - 高吞吐服务（多个独立副本协作）
+#
+# ================================================================================
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,7 +40,7 @@ import torch
 
 from sglang.srt.batch_overlap.two_batch_overlap import TboDPAttentionPreparer
 from sglang.srt.distributed.parallel_state import get_tp_group
-from sglang.srt.environ import envs
+from sglang.srt.environ import envs  # 环境变量配置
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.metrics.collector import DPCooperationInfo
 from sglang.srt.model_executor.forward_batch_info import ForwardMode

@@ -22,6 +22,46 @@ limitations under the License.
 The radix tree data structure for managing the KV cache.
 """
 
+# ============================================================================
+# RadixAttention: SGLang的秘密武器 (SGLang's Secret Weapon)
+# ============================================================================
+#
+# 【核心概念】什么是 RadixAttention？
+# RadixAttention 是基于 Radix Tree（基数树）的 KV cache 自动前缀共享系统
+# 这是 SGLang 相比其他推理框架的杀手级特性之一
+#
+# 【生动比喻】像图书馆的卡片目录系统
+# 想象一个图书馆：
+# - 传统方法：每本书都要完整编目一次，即使书名前缀相同
+# - RadixAttention：共同前缀只编目一次，后续书籍复用这些前缀索引
+#
+# 例如多个请求都以 "Translate the following text:" 开头：
+# - 传统：每个请求都要计算一次这个前缀的 KV cache
+# - Radix：第一次计算后，后续请求自动复用，秒速响应
+#
+# 【为什么重要】性能加速的关键
+# 1. 共享系统提示词：多个请求复用相同的 system prompt KV cache
+# 2. 批量相似查询：如翻译任务、代码补全等场景，前缀大量重复
+# 3. 多轮对话：历史对话上下文自动复用，不需要重新计算
+# 4. 实测效果：在某些场景下可以达到 10x+ 的加速
+#
+# 【关键数据结构】
+# - RadixKey: 封装 token_ids 和 extra_key（用于隔离 LoRA、cache_salt 等）
+# - TreeNode: 树的节点，存储 key 片段、KV cache indices、引用计数等
+# - RadixCache: 管理整个 Radix Tree 的核心类
+#
+# 【核心操作流程】
+# 1. match_prefix(): 查找请求的最长缓存前缀 → 命中则秒速返回
+# 2. insert(): 将新请求的 KV cache 插入树中 → 自动构建共享结构
+# 3. evict(): 内存不足时按策略(LRU/LFU等)驱逐叶子节点 → 智能释放
+#
+# 【技术亮点】
+# - Page-aligned storage: 支持分页存储，与 PagedAttention 兼容
+# - Lazy node splitting: 匹配时动态分裂节点，优化树结构
+# - Priority-aware eviction: 支持优先级感知的驱逐策略
+# - Hash-based deduplication: 使用 SHA256 哈希实现跨节点去重
+# ============================================================================
+
 import heapq
 import logging
 import sys

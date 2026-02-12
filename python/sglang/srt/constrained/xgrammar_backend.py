@@ -13,6 +13,35 @@
 # ==============================================================================
 """Constrained decoding with xgrammar backend."""
 
+# ============================================================================
+# XGrammar Backend - 高性能约束解码的有限状态机实现
+# XGrammar Backend - High-Performance Constrained Decoding with Finite State Machines
+# ============================================================================
+#
+# 【模块功能 What】
+# XGrammar backend 实现了基于有限状态机(FSM)的高性能约束解码
+# Implements FSM-based high-performance constrained decoding for grammar enforcement
+#
+# 【技术原理 Technical】
+# 核心机制：使用有限状态机(FSM)在每个解码步骤计算 token 掩码
+# Core mechanism: Uses Finite State Machines (FSM) to compute token masks at each decoding step
+#
+# FSM 比喻：就像一个"语法交通灯系统"
+# FSM metaphor: Like a "grammar traffic light system"
+# - 每个状态是一个路口，定义了当前可以走的方向(合法token)
+#   Each state is an intersection defining which directions you can go (valid tokens)
+# - 接受 token 后状态转移，就像通过路口后到达下一个路口
+#   Accepting a token transitions to next state, like reaching the next intersection
+# - 红灯(mask=0)表示该 token 违反语法，绿灯(mask=1)表示该 token 合法
+#   Red light (mask=0) means token violates grammar, green light (mask=1) means valid token
+#
+# 【支持的语法类型 Supported Grammar Types】
+# - JSON Schema: 结构化 JSON 输出约束
+# - EBNF: 扩展巴科斯范式语法规则
+# - Regex: 正则表达式模式匹配
+# - Structural Tags: 特殊格式标记(如函数调用)
+# ============================================================================
+
 import dataclasses
 import json
 import logging

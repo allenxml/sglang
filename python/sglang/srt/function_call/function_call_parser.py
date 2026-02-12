@@ -1,3 +1,24 @@
+# ============================================================
+# 功能调用解析器 (Function Call Parser)
+# ============================================================
+# 【功能概述 - What】
+# 解析模型输出文本，提取其中的工具/函数调用信息
+# Parses model output text to extract tool/function call information
+#
+# 【核心比喻 - Metaphor】
+# 像一个翻译器：读取模型的"想要使用工具的意图"，将其转换为可执行的函数调用
+# Like a translator: reads the model's "intent to use a tool" and converts it
+# into executable function calls
+#
+# 【使用场景 - Use Case】
+# - Agent 应用：智能助手需要调用外部工具（搜索、计算器、数据库等）
+# - 工具增强的 LLM：模型输出特定格式（如 JSON），表达"我想调用某函数"
+# - 流式生成：边生成边解析，实时提取工具调用
+#
+# 【核心类 - Key Class】
+# FunctionCallParser: 统一的解析入口，支持多种模型格式（Qwen、Llama、DeepSeek等）
+# ============================================================
+
 import logging
 from typing import Dict, List, Literal, Optional, Set, Tuple, Type, Union
 

@@ -75,3 +75,24 @@ def example(s):
         )
     )
 ```
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/lang/choices.py` | 选择方法实现：`TokenLengthNormalized`、`GreedyTokenSelection`、`UnconditionalLikelihoodNormalized` 类 |
+| `python/sglang/__init__.py` | 导出 `sgl.token_length_normalized`、`sgl.greedy_token_selection`、`sgl.unconditional_likelihood_normalized` |
+
+### 关键代码逻辑
+
+- **Token 长度归一化**（默认方法）：计算所有 token 的平均 logprob，选择平均值最高的选项
+- **贪心 token 选择**：仅使用首个 token 的 logprob；对较短选项用其平均 logprob 延伸以进行长度对齐比较
+- **无条件似然归一化**：从条件 logprob 中减去无条件（无上下文）logprob 后再取平均；需要额外一次 LLM 调用
+
+### 集成要点
+
+- **后端要求**：仅 `RuntimeEndpoint`（SGLang 原生后端）支持 `choices_method`；OpenAI 后端使用自有实现
+- **使用方式**：在 `@sgl.function` 装饰的函数中使用 `sgl.gen("answer", choices=[...], choices_method=sgl.token_length_normalized)`
+- **依赖 logprob**：所有方法都依赖服务器为每个候选选项返回逐 token 的 logprob

@@ -11,6 +11,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+
+# ================================================================================
+# 🔀 数据并行控制器 (Data Parallel Controller)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 数据并行控制器（DataParallelController）负责在 DP（Data Parallelism）环境下，将用户请求
+# 智能分发到多个独立的模型副本（DP Workers），实现横向扩展和负载均衡。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"连锁餐厅的总调度中心"：
+# - 总调度中心（DataParallelController） = 接听电话，决定把订单分配给哪家分店
+# - 各分店（DP Workers） = 独立的模型副本，各自处理自己的订单
+# - 负载均衡（Load Balancing） = 把订单分配给最空闲的分店，避免某家分店太忙
+# - Round-Robin = 轮流分配（公平，但不考虑实际负载）
+# - Least-Load = 分配给负载最低的分店（更智能）
+#
+# 【核心架构】Architecture
+# 1. 请求路由：接收来自 TokenizerManager 的请求，选择目标 DP rank
+# 2. 负载均衡：根据策略（Round-Robin / Least-Load）选择最优 Worker
+# 3. 健康监控：定期检查各 Worker 的健康状态
+# 4. 故障恢复：自动剔除故障 Worker，避免请求超时
+#
+# 【负载均衡策略】Load Balancing Methods
+# - ROUND_ROBIN：轮流分配（简单，公平，但不考虑实际负载）
+# - TOTAL_REQUESTS：分配给请求数最少的 Worker
+# - TOTAL_TOKENS：分配给总 token 数最少的 Worker（推荐）
+# - FOLLOW_BOOTSTRAP_ROOM：跟随 Prefill-Decode 分离模式的分配
+#
+# 【使用示例】Usage
+# 启动 DP=3 的服务：
+#   python -m sglang.launch_server \
+#     --model meta-llama/Llama-3.1-70B \
+#     --dp-size 3 \                      # 3个数据并行副本
+#     --load-balance-method least_req \  # 负载均衡策略
+#     --port 30000
+#
+# 【关键指标】Key Metrics
+# - 各 Worker 的请求数和 token 数（用于负载均衡决策）
+# - 请求分发延迟（Controller → Worker）
+# - Worker 健康状态（存活/故障）
+#
+# ================================================================================
+
 """A controller that dispatches requests to multiple data parallel workers."""
 
 import faulthandler
@@ -26,7 +70,7 @@ import psutil
 import setproctitle
 import zmq
 
-from sglang.srt.environ import envs
+from sglang.srt.environ import envs  # 环境变量配置
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.managers.io_struct import (
     ActiveRanksOutput,
@@ -67,16 +111,27 @@ from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 logger = logging.getLogger(__name__)
 
 
+# ======== 负载均衡策略枚举 ========
 class LoadBalanceMethod(Enum):
-    """Load balance method."""
+    """
+    负载均衡方法
 
-    ROUND_ROBIN = auto()
-    FOLLOW_BOOTSTRAP_ROOM = auto()
-    TOTAL_REQUESTS = auto()
-    TOTAL_TOKENS = auto()
+    Load balance method.
+
+    【策略对比】
+    - ROUND_ROBIN: 轮流分配（最简单，公平，但不考虑实际负载）
+    - TOTAL_REQUESTS: 分配给当前请求数最少的 Worker
+    - TOTAL_TOKENS: 分配给当前总 token 数最少的 Worker（推荐）
+    - FOLLOW_BOOTSTRAP_ROOM: 跟随 Prefill-Decode 分离模式的分配
+    """
+    ROUND_ROBIN = auto()  # 轮询
+    FOLLOW_BOOTSTRAP_ROOM = auto()  # 跟随预分配
+    TOTAL_REQUESTS = auto()  # 最少请求数
+    TOTAL_TOKENS = auto()  # 最少 token 数
 
     @classmethod
     def from_str(cls, method: str):
+        """从字符串解析负载均衡策略"""
         method = method.upper()
         try:
             return cls[method]
@@ -84,14 +139,31 @@ class LoadBalanceMethod(Enum):
             raise ValueError(f"Invalid load balance method: {method}") from exc
 
 
+# ======== DP 预算管理器 ========
 class DPBudget:
+    """
+    DP 预算管理器：跟踪各 DP Worker 的负载情况
+
+    【核心数据】
+    - total_requests[i]: 第 i 个 Worker 当前处理的请求数
+    - total_tokens[i]: 第 i 个 Worker 当前处理的 token 总数
+
+    【工作原理】
+    - 定期从各 Worker 收集负载更新
+    - 根据负载均衡策略选择目标 Worker
+    - 分配请求后，乐观更新预算（避免连续分配到同一 Worker）
+    """
     def __init__(self, dp_size: int):
-        self.dp_size = dp_size
-        self.total_requests = [0] * dp_size
-        self.total_tokens = [0] * dp_size
+        self.dp_size = dp_size  # DP 副本数量
+        self.total_requests = [0] * dp_size  # 各 Worker 的请求数
+        self.total_tokens = [0] * dp_size  # 各 Worker 的 token 总数
 
     def update_budget(self, load_update: WatchLoadUpdateReq):
-        """Update the budget."""
+        """
+        更新各 Worker 的负载预算（从 Worker 收集的实际负载）
+
+        Update the budget.
+        """
         for load in load_update.loads:
             self.total_requests[load.dp_rank] = load.num_reqs
             self.total_tokens[load.dp_rank] = load.num_tokens

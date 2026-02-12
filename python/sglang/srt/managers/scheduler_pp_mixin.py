@@ -1,3 +1,54 @@
+# ================================================================================
+# 🔗 流水线并行调度混入类 (Scheduler Pipeline Parallelism Mixin)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 这个文件定义了 Pipeline Parallelism（PP）环境下的调度逻辑，将模型按层切分到多个 GPU，
+# 通过流水线方式传递中间激活值，实现超大模型的推理。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"汽车组装流水线"：
+# - 流水线的每个站点（PP stage）= 不同的 GPU
+# - 第1站：安装底盘（Layer 0-10） → GPU 0
+# - 第2站：安装车身（Layer 11-20） → GPU 1
+# - 第3站：安装内饰（Layer 21-32） → GPU 2
+# - 每辆车（请求）依次经过所有站点
+# - Micro-batch：把一批车切分成小批，减少流水线气泡
+#
+# 【核心概念】Key Concepts
+# 1. Pipeline Stage：模型的一段连续层（如 Layer 0-10）
+# 2. Micro-batch：将大批次切分成多个小批次，提高流水线利用率
+# 3. P2P 通信：相邻 stage 之间通过点对点通信传递激活值
+# 4. 流水线气泡：等待上游 stage 输出时的空闲时间
+#
+# 【工作流程】Pipeline Flow
+# ```
+# Time →
+# GPU-0: [MB0] [MB1] [MB2] [空闲] [空闲]
+# GPU-1: [空闲] [MB0] [MB1] [MB2] [空闲]
+# GPU-2: [空闲] [空闲] [MB0] [MB1] [MB2]
+#
+# 问题：GPU-0 处理 MB0 时，GPU-1 和 GPU-2 空闲（气泡）
+# 解决：Micro-batching + 异步通信 + 批次重叠
+# ```
+#
+# 【核心优化】Key Optimizations
+# 1. Async P2P：异步发送，同步接收（减少等待时间）
+# 2. Async Batch Depth：最后一个 stage 缓冲多个输出（CPU 处理与 GPU 计算重叠）
+# 3. Proxy Tensors：只传递激活值形状信息，延迟实际数据传输
+#
+# 【适用场景】Use Cases
+# - 超大模型（405B+）单张 GPU 放不下
+# - 显存受限但网络带宽充足
+# - 批次大小较大（减少流水线气泡比例）
+#
+# 【性能特点】Performance Characteristics
+# - 显存需求：每张 GPU 只需 1/N 的模型大小
+# - 延迟：增加（需要多次 GPU 间传输）
+# - 吞吐：受流水线气泡影响（效率 < 100%）
+#
+# ================================================================================
+
 from __future__ import annotations
 
 import logging
@@ -15,7 +66,7 @@ from tqdm import tqdm
 from sglang.srt.disaggregation.base.conn import KVPoll
 from sglang.srt.disaggregation.utils import DisaggregationMode, poll_and_all_reduce
 from sglang.srt.distributed.parallel_state import P2PWork
-from sglang.srt.environ import envs
+from sglang.srt.environ import envs  # 环境变量配置
 from sglang.srt.layers.dp_attention import (
     get_attention_dp_rank,
     get_attention_dp_size,

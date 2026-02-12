@@ -6,6 +6,10 @@ customize key aspects of the server, including model selection, parallelism poli
 memory management, and optimization techniques.
 You can find all arguments by `python3 -m sglang.launch_server --help`
 
+**中文对照**：# 服务器参数
+
+此页面提供了命令行中使用的服务器参数列表，用于在部署期间配置语言模型服务器的行为和性能。这些参数使用户能够自定义服务器的关键方面，包括模型选择、并行策略、内存管理和优化技术。您可以通过 `python3 -m sglang.launch_server --help` 找到所有参数。
+
 ## Common launch commands
 
 - To use a configuration file, create a YAML file with your server arguments and specify it with `--config`. CLI arguments will override config file values.
@@ -75,6 +79,15 @@ You can find all arguments by `python3 -m sglang.launch_server --help`
   ```
 
 Please consult the documentation below and [server_args.py](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/server_args.py) to learn more about the arguments you may provide when launching a server.
+
+## 代码实现
+- **核心文件**: `python/sglang/srt/server_args.py`
+- **架构**: SGLang 使用集中式的 `ServerArgs` dataclass 来管理所有配置参数。参数按逻辑分组为模型、内存、运行时和日志等类别。系统使用 `argparse` 将 CLI 标志桥接到内部配置对象，然后将其传播到所有核心管道组件（TokenizerManager、Scheduler、ModelRunner 等）。
+- **关键代码片段**:
+  - `class ServerArgs`: 一个全面的 dataclass，定义每个可配置字段及其默认值。
+  - `add_cli_args(parser)`: 一个静态方法，将参数注册到 CLI 解析器中，使用参数组来更好地组织 `--help` 输出。
+  - `from_cli_args(args)`: 从解析结果实例化 `ServerArgs` 对象的逻辑，包括验证和派生设置（如计算 `max_total_tokens`）。
+- **集成要点**: 这些参数是 `launch_server.py` 中首先初始化的内容。生成的 `ServerArgs` 对象被传递到管道中，用于配置 GPU 内存池、设置并行策略以及确定内核的执行后端。
 
 ## Model and tokenizer
 | Argument | Description | Defaults | Options |

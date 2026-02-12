@@ -25,6 +25,33 @@ When you need to profile prefill or decode workers in PD disaggregation mode, pl
 
 For deploying PD disaggregation at scale with load balancing and fault tolerance, SGLang provides a router. The router can distribute requests between prefill and decode instances using various routing policies. For detailed information on setting up routing with PD disaggregation, including configuration options and deployment patterns, see the [SGLang Model Gateway (former Router)](../advanced_features/sgl_model_gateway.md#prefill-decode-disaggregation).
 
+**中文对照**：# PD 分离
+
+## 为什么以及什么是 PD 分离？
+
+大语言模型（LLM）推理包含两个截然不同的阶段：**预填充**和解码。预填充阶段是计算密集型的，处理整个输入序列，而解码阶段是内存密集型的，管理用于令牌生成的键值（KV）缓存。传统上，这些阶段在统一的引擎中处理，预填充和解码批次的组合调度会导致效率低下。为了应对这些挑战，我们在 SGLang 中引入了**预填充和解码（PD）分离**。
+
+### 统一调度的问题
+
+处理预填充和解码批次的传统统一引擎会导致两个重要问题：
+
+1. **预填充中断**：传入的预填充批次经常中断正在进行的解码批次，导致令牌生成大量延迟。
+2. **DP 注意力不平衡**：在数据并行（DP）注意力中，一个 DP 工作进程可能处理预填充批次，而另一个同时处理解码批次，导致解码延迟增加。
+
+PD 分离通过分离两个阶段来解决这些问题，使每个阶段都能进行定制优化。
+
+有关设计详情，请参阅[链接](https://docs.google.com/document/d/1rQXJwKd5b9b1aOzLh98mnyMhBMhlxXA5ATZTHoQrwvc/edit?tab=t.0)。
+
+目前，我们支持 Mooncake 和 NIXL 作为传输引擎。
+
+## PD 分离模式下的性能分析
+
+当您需要对 PD 分离模式下的预填充或解码工作进程进行性能分析时，请参阅基准测试和性能分析指南中的[在 PD 分离模式下进行性能分析](https://docs.sglang.io/developer_guide/benchmark_and_profiling.html#profile-in-pd-disaggregation-mode)部分。由于 torch 性能分析器的限制，预填充和解码工作进程必须使用专用的命令行选项分别进行性能分析。
+
+## 路由器集成
+
+为了大规模部署具有负载均衡和容错能力的 PD 分离，SGLang 提供了一个路由器。路由器可以使用各种路由策略在预填充和解码实例之间分发请求。有关使用 PD 分离设置路由的详细信息，包括配置选项和部署模式，请参阅 [SGLang 模型网关（前路由器）](../advanced_features/sgl_model_gateway.md#prefill-decode-disaggregation)。
+
 
 ## Mooncake
 ### Requirements
@@ -349,3 +376,54 @@ python -m sglang.launch_server \
   --node-rank 0 \
   --tp-size 16
 ```
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/disaggregation/prefill.py` | Prefill 端调度混入：`PrefillBootstrapQueue` 管理请求握手，`SchedulerDisaggregationPrefillMixin` 提供 prefill 专用事件循环 |
+| `python/sglang/srt/disaggregation/decode.py` | Decode 端调度混入：`DecodePreallocQueue` 预分配内存，`DecodeTransferQueue` 轮询 KV 传输完成状态 |
+| `python/sglang/srt/disaggregation/common/conn.py` | 通用连接层：`CommonKVManager`、`CommonKVSender`、`CommonKVReceiver`、`CommonKVBootstrapServer`，基于 ZMQ 的跨实例协调 |
+| `python/sglang/srt/disaggregation/mooncake/conn.py` | Mooncake 传输引擎：`MooncakeKVManager`、`MooncakeKVSender`、`MooncakeKVReceiver`，支持 GPU 直传和 NVLink 自定义内存池 |
+| `python/sglang/srt/disaggregation/nixl/conn.py` | NIXL 传输引擎：`NixlKVManager`、`NixlKVSender`、`NixlKVReceiver`，支持 UCX 和 LIBFABRIC 后端 |
+| `python/sglang/srt/disaggregation/ascend/conn.py` | Ascend NPU 传输引擎：使用 `memfabric_hybrid` 实现设备间 RDMA 传输 |
+| `python/sglang/srt/disaggregation/base/conn.py` | 抽象基类：定义 `KVManager`、`KVSender`、`KVReceiver` 接口规范 |
+| `python/sglang/srt/disaggregation/utils.py` | 工具类：`DisaggregationMode` 枚举、`MetadataBuffers` 元数据缓冲区、`ReqToMetadataIdxAllocator` 内存池索引分配 |
+| `python/sglang/srt/managers/scheduler.py` | 调度器主体：通过混入模式集成 prefill/decode 专用事件循环 |
+| `python/sglang/srt/server_args.py` | `--disaggregation-mode`、`--disaggregation-transfer-backend`、`--disaggregation-bootstrap-port` 等命令行参数定义 |
+
+### 架构
+
+```
+                        ┌─────────────────────────────┐
+                        │        Router（路由器）        │
+                        │   sglang_router.launch_router │
+                        └──────────┬──────────────────┘
+                                   │ 请求分发
+                    ┌──────────────┴──────────────┐
+                    ▼                              ▼
+         ┌──────────────────┐           ┌──────────────────┐
+         │  Prefill 实例     │           │  Decode 实例      │
+         │  --disaggregation │           │  --disaggregation │
+         │  -mode prefill    │           │  -mode decode     │
+         ├──────────────────┤           ├──────────────────┤
+         │ PrefillBootstrap  │◄─────────►│ DecodePrealloc   │
+         │ Queue（握手队列） │  Bootstrap │ Queue（预分配）   │
+         ├──────────────────┤  协调      ├──────────────────┤
+         │ GPU Prefill 计算  │           │ DecodeTransfer   │
+         │ → KV Cache 生成   │──────────►│ Queue（传输接收） │
+         └──────────────────┘  Mooncake/ ├──────────────────┤
+                                NIXL/    │ GPU Decode 计算   │
+                                Ascend   │ → Token 生成      │
+                                KV传输   └──────────────────┘
+```
+
+### 集成要点
+
+- **可插拔传输后端**：通过 `--disaggregation-transfer-backend` 选择 mooncake（默认）、nixl、ascend 或 fake（测试用），所有后端实现统一的 `KVManager`/`KVSender`/`KVReceiver` 接口
+- **调度器混入模式**：`SchedulerDisaggregationPrefillMixin` 和 `SchedulerDisaggregationDecodeMixin` 以混入方式注入 `Scheduler` 类，提供 prefill/decode 专用的 `event_loop_normal_disagg_*()` 和 `event_loop_overlap_disagg_*()` 事件循环
+- **Bootstrap 握手**：每个请求通过唯一的 `bootstrap_room` 进行 Prefill↔Decode 元数据交换（目标 KV 索引、输出 token、logprobs），协调端口由 `--disaggregation-bootstrap-port`（默认 8998）控制
+- **队列管理**：Prefill 端使用 `PrefillBootstrapQueue` → `disagg_prefill_inflight_queue` 两级队列；Decode 端使用 `DecodePreallocQueue` → `DecodeTransferQueue` → `waiting_queue` 三级队列
+- **TP/DP 支持**：通过 `--disaggregation-decode-tp` 和 `--disaggregation-decode-dp` 允许 Prefill 和 Decode 实例使用不同的并行度配置

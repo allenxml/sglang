@@ -1,3 +1,38 @@
+# ================================================================================
+# 📈 调度器指标混入类 (Scheduler Metrics Mixin)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 这个文件定义了 Scheduler 类的指标收集功能（使用 Mixin 设计模式），负责记录和导出
+# 调度器运行时的各种性能指标，包括吞吐量、延迟、缓存命中率、GPU利用率等。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"餐厅管理仪表盘"：
+# - Scheduler = 餐厅管理员
+# - SchedulerMetricsMixin = 仪表盘上的各种实时数据
+# - metrics_collector = 数据收集器（记录每分钟服务了多少桌、平均等待时间等）
+# - log_prefill_stats/log_decode_stats = 每次服务后更新仪表盘数据
+#
+# 【核心功能】Key Features
+# 1. 吞吐量指标：input_throughput (Prefill TPS), gen_throughput (Decode TPS)
+# 2. 资源利用率：GPU 显存占用、KV Cache 利用率、批次大小
+# 3. 缓存效率：Radix Cache 命中率、新token比例
+# 4. 延迟指标：队列等待时间、Forward Pass 时间
+# 5. 分布式指标：DP/TP/PP 各rank的负载情况
+#
+# 【Mixin 设计模式】Design Pattern
+# Mixin 是一种代码复用技术：
+# - Scheduler 类继承 SchedulerMetricsMixin
+# - 所有以 `self: Scheduler` 标注的方法都是 Scheduler 实例方法
+# - 避免单个类过大（Scheduler 主类专注调度逻辑，指标收集分离到此文件）
+#
+# 【与 Prometheus 集成】Prometheus Integration
+# - SchedulerMetricsCollector：将指标推送到 Prometheus
+# - Grafana 可视化：通过 Prometheus 查询指标，绘制仪表盘
+# - 告警规则：基于指标阈值触发告警（如 GPU 利用率 > 90%）
+#
+# ================================================================================
+
 from __future__ import annotations
 
 import dataclasses
@@ -9,7 +44,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Union
 
 from sglang.srt.disaggregation.kv_events import EventPublisherFactory, KVEventBatch
 from sglang.srt.disaggregation.utils import DisaggregationMode
-from sglang.srt.environ import envs
+from sglang.srt.environ import envs  # 环境变量配置
 from sglang.srt.managers.io_struct import (
     DisaggregationMetrics,
     GetLoadReqInput,
@@ -42,62 +77,84 @@ LOG_FORWARD_ITERS = envs.SGLANG_LOG_FORWARD_ITERS.get()
 ENABLE_METRICS_DEVICE_TIMER = envs.SGLANG_ENABLE_METRICS_DEVICE_TIMER.get()
 
 
+# ======== Prefill 阶段的统计数据结构 ========
 @dataclasses.dataclass
 class PrefillStats:
-    """Stats for logging prefill batch metrics."""
+    """
+    Prefill 批次的统计信息（用于日志和指标）
 
-    log_input_tokens: int
-    log_hit_tokens: int
-    new_token_ratio: float
-    running_bs: int
-    num_new_seqs: int  # len(can_run_list)
+    Stats for logging prefill batch metrics.
+    """
+    log_input_tokens: int  # 本次 Prefill 处理的 token 总数
+    log_hit_tokens: int  # 命中 RadixCache 的 token 数
+    new_token_ratio: float  # 新token比例 = log_input_tokens / (log_input_tokens + log_hit_tokens)
+    running_bs: int  # 当前运行的请求数（批次大小）
+    num_new_seqs: int  # 本次新加入的序列数 len(can_run_list)
 
 
+# ======== KV Cache 相关指标 ========
 class KvMetrics:
+    """KV Cache 相关的指标数据"""
     def __init__(self):
-        self.request_active_slots = None
-        self.request_total_slots = None
-        self.kv_active_blocks = None
-        self.kv_total_blocks = None
-        self.num_requests_waiting = None
-        self.gpu_cache_usage_perc = None
-        self.gpu_prefix_cache_hit_rate = None
-        self.data_parallel_rank = None
+        self.request_active_slots = None  # 活跃的请求槽位数
+        self.request_total_slots = None  # 总请求槽位数
+        self.kv_active_blocks = None  # 活跃的 KV Cache 块数
+        self.kv_total_blocks = None  # 总 KV Cache 块数
+        self.num_requests_waiting = None  # 等待队列中的请求数
+        self.gpu_cache_usage_perc = None  # GPU 缓存利用率（百分比）
+        self.gpu_prefix_cache_hit_rate = None  # Prefix Cache 命中率
+        self.data_parallel_rank = None  # 数据并行的 rank 编号
 
 
+# ======== 调度器指标混入类 ========
 class SchedulerMetricsMixin:
     def init_metrics(
         self: Scheduler, tp_rank: int, pp_rank: int, dp_rank: Optional[int]
     ):
+        """
+        初始化调度器的指标收集系统
+
+        【初始化内容】
+        1. 基础统计变量（吞吐量、延迟等）
+        2. Speculative Decoding 指标（如果启用）
+        3. Prefill-Decode 分离指标（如果启用 Disaggregation）
+        4. Prometheus 指标收集器（如果启用 metrics）
+        """
+        # ======== 基础统计变量 ========
         # Basic stats
-        self.forward_ct_decode = 0
-        self.num_generated_tokens = 0
-        self.last_decode_stats_tic = time.perf_counter()
-        self.last_prefill_stats_tic = time.perf_counter()
-        self.last_prefill_tokens = 0
-        self.last_gen_throughput: float = 0.0
-        self.last_input_throughput: float = 0.0
-        self.step_time_dict = defaultdict(list)  # Dict[batch size -> step time]
+        self.forward_ct_decode = 0  # Decode 阶段的 forward 次数
+        self.num_generated_tokens = 0  # 累计生成的 token 数
+        self.last_decode_stats_tic = time.perf_counter()  # 上次 Decode 统计的时间戳
+        self.last_prefill_stats_tic = time.perf_counter()  # 上次 Prefill 统计的时间戳
+        self.last_prefill_tokens = 0  # 上次 Prefill 处理的 token 数
+        self.last_gen_throughput: float = 0.0  # 上次计算的生成吞吐量（token/s）
+        self.last_input_throughput: float = 0.0  # 上次计算的输入吞吐量（token/s）
+        self.step_time_dict = defaultdict(list)  # 记录每个批次大小的 step 时间：Dict[batch_size -> List[step_time]]
 
+        # ======== Speculative Decoding 指标 ========
         # The number of accepted tokens and forward ct for the recent `decode_log_interval` batches (for logging)
-        self.spec_num_accepted_tokens = 0
-        self.spec_num_forward_ct = 0
+        self.spec_num_accepted_tokens = 0  # 最近一段时间接受的推测 token 数
+        self.spec_num_forward_ct = 0  # 最近一段时间的 forward 次数
         # The total number of accepted tokens and forward ct for the whole server lifetime
-        self.spec_total_num_accepted_tokens = 0
-        self.spec_total_num_forward_ct = 0
+        self.spec_total_num_accepted_tokens = 0  # 服务器生命周期内总共接受的推测 token 数
+        self.spec_total_num_forward_ct = 0  # 服务器生命周期内总共的 forward 次数
 
+        # ======== Prefill-Decode 分离（PD Disaggregation）指标 ========
         # For PD disaggregation
-        self.kv_transfer_speed_gb_s: float = 0.0
-        self.kv_transfer_latency_ms: float = 0.0
-        self.kv_transfer_bootstrap_ms: float = 0.0
-        self.kv_transfer_alloc_ms: float = 0.0
-        self.kv_transfer_total_mb: float = 0.0
+        self.kv_transfer_speed_gb_s: float = 0.0  # KV Cache 传输速度（GB/s）
+        self.kv_transfer_latency_ms: float = 0.0  # KV Cache 传输延迟（ms）
+        self.kv_transfer_bootstrap_ms: float = 0.0  # 传输初始化时间（ms）
+        self.kv_transfer_alloc_ms: float = 0.0  # 内存分配时间（ms）
+        self.kv_transfer_total_mb: float = 0.0  # 传输总数据量（MB）
 
+        # ======== 临时变量（用于跨方法传递信息）========
         # Only for `log_prefill_stats` to pass information to `log_prefill_stats_late`
         self.temp_prefill_info: Optional[Dict] = None
 
+        # ======== 统计数据汇总对象 ========
         self.stats = SchedulerStats()
 
+        # ======== Prometheus 指标收集器初始化 ========
         # Metrics
         self.current_scheduler_metrics_enabled = (
             self.attn_tp_rank == 0 or self.enable_metrics_for_all_schedulers

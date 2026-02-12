@@ -4,6 +4,10 @@ The document addresses how to set up the [SGLang](https://github.com/sgl-project
 SGLang is enabled and optimized on the CPUs equipped with Intel® AMX® Instructions,
 which are 4th generation or newer Intel® Xeon® Scalable Processors.
 
+**中文对照**：# CPU 服务器
+
+本文档介绍如何设置 [SGLang](https://github.com/sgl-project/sglang) 环境并在 CPU 服务器上运行 LLM 推理。SGLang 在配备 Intel® AMX® 指令的 CPU 上启用并进行了优化，这些 CPU 是第 4 代或更新的 Intel® Xeon® 可扩展处理器。
+
 ## Optimized Model List
 
 A list of popular LLMs are optimized and run efficiently on CPU,
@@ -22,6 +26,8 @@ and DeepSeek series like DeepSeek-R1 and DeepSeek-V3.1-Terminus.
 
 **Note:** The model identifiers listed in the table above
 have been verified on 6th Gen Intel® Xeon® P-core platforms.
+
+**中文对照**：**注意**：上表中列出的模型标识符已在第 6 代 Intel® Xeon® P-core 平台上验证。
 
 ## Installation
 
@@ -320,3 +326,31 @@ For instance, use `--tp 3` to utilize 1 socket with 3 sub-NUMA clusters on an In
 
 Once the server have been launched, you can test it using the `bench_serving` command or create
 your own commands or scripts following [the benchmarking example](#benchmarking-with-requests).
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/model_executor/cpu_graph_runner.py` | CPU 图运行器：基于 torch.compile 的执行，替代 CUDA 图 |
+| `python/sglang/srt/layers/attention/intel_amx_backend.py` | Intel AMX 注意力后端：针对第 4 代及以上 Xeon 处理器优化 |
+| `python/sglang/srt/layers/amx_utils.py` | Intel 高级矩阵扩展的 AMX 工具函数 |
+| `python/sglang/srt/mem_cache/memory_pool_host.py` | 主机（CPU）内存池：在系统 RAM 而非 GPU VRAM 中管理 KV 缓存 |
+| `python/sglang/srt/configs/device_config.py` | 设备检测逻辑：设置 `--device cpu` 时路由到 CPU 后端 |
+| `sgl-kernel/setup_cpu.py` | CPU 专用内核编译（不需要 CUDA） |
+| `docker/xeon.Dockerfile` | 带 AMX/MKL 依赖的 Intel Xeon CPU Docker 镜像 |
+
+### 关键代码逻辑
+
+- **CPU 引擎激活**：环境变量 `SGLANG_USE_CPU_ENGINE=1` 在 `device_config.py` 中触发 CPU 专用代码路径
+- **内存管理**：`memory_pool_host.py` 在系统 RAM 中分配 KV 缓存；TP rank 映射到子 NUMA 集群（SNCs）
+- **torch.compile 优化**：`cpu_graph_runner.py` 使用 `torch.compile` 而非 CUDA 图进行解码加速
+- **线程绑定**：`SGLANG_CPU_OMP_THREADS_BIND` 控制每 rank 的 OpenMP 线程亲和性以实现 NUMA 感知执行
+
+### 集成要点
+
+- **安装**：使用 `pyproject_cpu.toml`，从 `download.pytorch.org/whl/cpu` 获取仅 CPU 的 PyTorch wheel
+- **CPU 上的张量并行**：TP rank 对应子 NUMA 集群；`--tp 6` 使用 6 个 SNCs
+- **量化**：通过 `--quantization w8a8_int8` 的 W8A8 INT8 利用 Intel AMX VNNI 指令
+- **torch.compile**：`--enable-torch-compile --torch-compile-max-bs N` 启用编译的解码内核（最大批大小最多 16）

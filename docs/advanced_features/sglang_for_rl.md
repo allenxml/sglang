@@ -2,6 +2,10 @@
 
 This document is a practical guide for infrastructure teams integrating SGLang into RL and post-training systems. It focuses on the operational pain points in the loop (rollout, evaluation, training, weight sync) and maps them to concrete SGLang APIs, flags, and integration patterns. The focus is on maximizing rollout efficiency, accuracy and stability while keeping rollout-serving behavior aligned in production environments.
 
+**中文对照**：# SGLang 用于强化学习系统
+
+本文档是将 SGLang 集成到强化学习和后训练系统的 infrastructure 团队的实用指南。它关注循环中的操作痛点（ rollout、评估、训练、权重同步），并将它们映射到具体的 SGLang API、标志和集成模式。重点是最大化 rollout 效率、准确性和稳定性，同时保持生产环境中 rollout 服务行为的一致性。
+
 ## Why SGLang for RL Lifecycle?
 
 Let's embrace a guiding principle from early DeepMind's RL engineering:
@@ -246,3 +250,50 @@ Key benefits for RL infrastructure:
 - **Dynamic load balancing and long-tail mitigation**: Unlike static partitioning, the SGLang Model Gateway enables request-level dynamic dispatching for multi-turn RL. It can distribute different turns of a conversation across different servers to balance workloads and eliminate long-tail latency caused by varying sequence lengths.
 
 For deployment and configuration, see: [SGLang Model Gateway](sgl_model_gateway.md)
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/entrypoints/http_server.py` | 暴露 `/release_memory_occupation`、`/resume_memory_occupation`、`/pause_generation`、`/continue_generation`、`/update_weights_from_disk`、`/update_weights_from_tensor`、`/update_weights_from_distributed` 端点 |
+| `python/sglang/srt/entrypoints/engine.py` | Python Engine API: `engine.update_weights_from_disk()`、`engine.update_weights_from_tensor()`、`engine.init_weights_update_group()` 等 |
+| `python/sglang/srt/managers/scheduler.py` | 处理睡眠/唤醒内存管理、暂停/恢复状态转换、空闲检查 |
+| `python/sglang/srt/managers/scheduler_update_weights_mixin.py` | 权重更新逻辑：磁盘加载、张量反序列化、NCCL 分布式广播 |
+| `python/sglang/srt/managers/io_struct.py` | 定义 `ReleaseMemoryOccupationReqInput`、`ResumeMemoryOccupationReqInput`、`PauseGenerationReqInput`、`UpdateWeightsFromDiskReqInput` 等 |
+| `python/sglang/srt/managers/tokenizer_communicator_mixin.py` | 通过 `_Communicator` 将 HTTP 的 RL 控制请求路由到 Scheduler |
+
+### 架构
+
+```
+[RL Training Loop]
+       │
+  ┌────┴────────────────────────────────────┐
+  │  1. pause_generation (abort/retract/    │
+  │     in_place)                           │
+  │  2. release_memory_occupation           │
+  │     (释放 KV cache + 权重以供            │
+  │      训练使用 GPU 内存)                  │
+  │  3. >>> 训练步骤 <<<                    │
+  │  4. resume_memory_occupation            │
+  │  5. update_weights_from_{disk|tensor|   │
+  │     distributed}                        │
+  │  6. continue_generation                 │
+  │  7. >>> Rollout 步骤 <<<                │
+  └─────────────────────────────────────────┘
+```
+
+### 关键代码逻辑
+
+- **睡眠/唤醒**: `--enable-memory-saver` 通过 `torch_memory_saver` 启用 CUDA-graph 感知的权重卸载；`release_memory_occupation` 释放 KV cache 和/或权重，同时保持服务器进程存活
+- **三种重载策略**: `update_weights_from_disk`（基于 checkpoint）、`update_weights_from_tensor`（内存中共位）、`update_weights_from_distributed`（用于解耦设置的 NCCL 广播）
+- **暂停模式**: `abort`（返回待处理请求）、`retract`（将运行中的请求移至等待队列）、`in_place`（冻结而不改变状态）
+- **确定性推理**: `--enable-deterministic-inference` 减少跨批次形状的非确定性，以实现训练-推理对齐
+
+### 集成要点
+
+- **服务器标志**: `--enable-memory-saver`、`--enable-deterministic-inference`
+- **权重更新组**: `init_weights_update_group()` → `update_weights_from_distributed()` → `destroy_weights_update_group()` 生命周期用于基于 NCCL 的重载
+- **RL 框架**: 通过 HTTP API 或 Python Engine API 与 verl、miles 和其他 RL 训练系统兼容
+- **负载均衡**: SGLang Model Gateway 为多服务器 rollout 部署提供缓存感知路由

@@ -1,3 +1,50 @@
+# ================================================================================
+# 🔍 调度器性能分析混入类 (Scheduler Profiler Mixin)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 这个文件定义了 Scheduler 的性能分析功能（使用 PyTorch Profiler），用于详细记录
+# 每个 GPU 操作的执行时间，帮助开发者定位性能瓶颈。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"医院体检的 CT 扫描仪"：
+# - 普通体检（metrics） = 测量身高、体重、血压（宏观指标）
+# - CT 扫描（profiler） = 扫描身体内部每个器官的详细情况（微观分析）
+# - Profiler 输出 = 详细的扫描报告（每个 kernel 的执行时间、内存占用）
+#
+# 【核心功能】Key Features
+# 1. PyTorch Profiler 集成：记录 GPU kernel 执行时间
+# 2. 分阶段分析：可以只分析 Prefill 或 Decode 阶段
+# 3. 活动类型：CPU、GPU、内存拷贝
+# 4. 输出格式：Chrome Trace JSON（可用 chrome://tracing 查看）
+# 5. 多进程合并：支持 TP/DP 环境下的 trace 合并
+#
+# 【使用方式】Usage
+# 通过 API 触发 Profiling：
+#   POST /start_profile
+#   {
+#     "output_dir": "./profiles",
+#     "num_steps": 100,
+#     "activities": ["cpu", "cuda"],
+#     "profile_by_stage": true
+#   }
+#
+#   ... 运行一段时间 ...
+#
+#   POST /stop_profile
+#
+# 【输出文件】Output Files
+# - sglang_profile_{timestamp}.json: Chrome Trace 格式
+# - 用 chrome://tracing 打开查看可视化时间线
+#
+# 【典型应用场景】Use Cases
+# - 找出最慢的 GPU kernel（如 attention 计算）
+# - 分析 CPU-GPU 传输瓶颈
+# - 优化 CUDA Graph 捕获
+# - 对比不同配置的性能差异
+#
+# ================================================================================
+
 from __future__ import annotations
 
 import logging
@@ -8,7 +55,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 import torch
 
-from sglang.srt.environ import envs
+from sglang.srt.environ import envs  # 环境变量配置
 from sglang.srt.managers.io_struct import ProfileReq, ProfileReqOutput, ProfileReqType
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.server_args import get_global_server_args
@@ -34,8 +81,19 @@ if _is_npu:
 logger = logging.getLogger(__name__)
 
 
+# ======== 性能分析混入类 ========
 class SchedulerProfilerMixin:
     def init_profiler(self: Scheduler):
+        """
+        初始化 Profiler 相关状态变量
+
+        【初始化内容】
+        - PyTorch Profiler 实例
+        - 输出目录和活动类型配置
+        - 计数器（用于控制 profiling 的开始和结束）
+        - V2 版本的 ProfileManager（如果启用）
+        """
+        # ======== V2 版本：使用统一的 ProfileManager ========
         if envs.SGLANG_PROFILE_V2.get():
             self._profile_manager = ProfileManager(
                 tp_rank=self.tp_rank,
@@ -44,25 +102,30 @@ class SchedulerProfilerMixin:
             )
             return
 
-        self.torch_profiler = None
-        self.torch_profiler_output_dir: Optional[Path] = None
-        self.profiler_activities: Optional[List[str]] = None
-        self.profile_id: Optional[str] = None
+        # ======== V1 版本：直接使用 PyTorch Profiler ========
+        self.torch_profiler = None  # PyTorch Profiler 实例
+        self.torch_profiler_output_dir: Optional[Path] = None  # 输出目录
+        self.profiler_activities: Optional[List[str]] = None  # 活动类型（cpu, cuda, memory）
+        self.profile_id: Optional[str] = None  # Profile ID（用于多次 profiling 的区分）
 
-        self.profiler_start_forward_ct: Optional[int] = None
-        self.profiler_target_forward_ct: Optional[int] = None
+        # ======== 计数器：控制 profiling 的开始和结束 ========
+        self.profiler_start_forward_ct: Optional[int] = None  # 开始 profiling 的 forward 计数
+        self.profiler_target_forward_ct: Optional[int] = None  # 目标 forward 计数（结束 profiling）
 
-        self.profiler_prefill_ct: Optional[int] = None
-        self.profiler_decode_ct: Optional[int] = None
-        self.profiler_target_prefill_ct: Optional[int] = None
-        self.profiler_target_decode_ct: Optional[int] = None
+        # ======== 分阶段 profiling 计数器 ========
+        self.profiler_prefill_ct: Optional[int] = None  # 当前 Prefill 计数
+        self.profiler_decode_ct: Optional[int] = None  # 当前 Decode 计数
+        self.profiler_target_prefill_ct: Optional[int] = None  # 目标 Prefill 计数
+        self.profiler_target_decode_ct: Optional[int] = None  # 目标 Decode 计数
 
-        self.profile_by_stage: bool = False
-        self.profile_in_progress: bool = False
-        self.merge_profiles = False
+        # ======== 状态标志 ========
+        self.profile_by_stage: bool = False  # 是否按阶段（Prefill/Decode）分别 profile
+        self.profile_in_progress: bool = False  # 是否正在 profiling
+        self.merge_profiles = False  # 是否合并多个 rank 的 profile
 
+        # ======== For ROCM ========
         # For ROCM
-        self.rpd_profiler = None
+        self.rpd_profiler = None  # ROCM 专用 profiler（AMD GPU）
 
     def init_profile(
         self: Scheduler,

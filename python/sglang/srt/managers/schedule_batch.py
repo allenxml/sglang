@@ -19,6 +19,34 @@ from sglang.srt.utils.common import ceil_align
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# ====================================================================
+# 📚 学习导读：调度批次数据结构（Schedule Batch）
+# ====================================================================
+#
+# 【这个文件是做什么的？】
+# 定义了调度系统中最核心的数据结构——Req（单个请求）和
+# ScheduleBatch（一个批次）。Scheduler 用这些结构来管理
+# 所有正在处理和等待处理的请求。
+#
+# 【生活比喻】
+# - Req（请求）= 一张点菜单，记录了这桌客人要什么菜、
+#   做到哪一步了、已经上了几道菜
+# - ScheduleBatch（批次）= 厨师台面上当前这一轮要做的所有菜单，
+#   打包在一起方便统一操作
+# - ForwardMode（前向模式）= 当前是"备菜"（Prefill）还是"炒菜"（Decode）
+#
+# 【核心数据结构】
+# - Req：单个推理请求的完整状态
+#   - origin_input_ids：原始输入 Token
+#   - output_ids：已生成的 Token
+#   - sampling_params：采样参数
+# - ScheduleBatch：一个批次的所有请求和相关张量
+# - ForwardMode：区分 Prefill（预填充）和 Decode（解码）阶段
+#
+# 【阅读建议】
+# 1. 先看 Req 类——理解单个请求包含哪些信息
+# 2. 再看 ScheduleBatch——理解批次是如何组织的
+# ====================================================================
 """
 Store information about requests and batches.
 
@@ -77,6 +105,10 @@ from sglang.srt.metrics.collector import (
     SchedulerMetricsCollector,
     TimeStats,
 )
+# ForwardMode（前向模式）：区分当前批次的执行阶段
+# - EXTEND/Prefill = "备菜阶段"，处理新输入的所有 Token（首次计算 KV 缓存）
+# - DECODE = "炒菜阶段"，每次只生成一个新 Token（逐步推理）
+# - MIXED = 混合模式，一个批次里既有备菜也有炒菜（chunked prefill 场景）
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
     ForwardBatch,
@@ -480,6 +512,8 @@ class MultimodalInputs:
         # other args would be kept intact
 
 
+# RequestStage：请求所处的生命周期阶段
+# 比喻：一道菜从"接单" -> "排队等候" -> "备菜" -> "炒菜" -> "上菜"的各个环节
 class RequestStage(str, enum.Enum):
     # Tokenizer
     TOKENIZE = "tokenize"
@@ -509,6 +543,17 @@ class RequestStage(str, enum.Enum):
     DECODE_QUICK_FINISH = "quick_finish"
 
 
+# ====================================================================
+# Req 类：单个推理请求（一张"点菜单"）
+# ====================================================================
+# 每个 Req 对象代表用户发来的一个推理请求。
+# 就像餐厅里的一张点菜单：
+#   - 记录了客人点了什么（origin_input_ids = 原始输入）
+#   - 厨师已经做好了哪些菜（output_ids = 已生成的 Token）
+#   - 这桌客人的口味偏好（sampling_params = 采样参数，如 temperature）
+#   - 菜做到哪一步了（各种状态标记）
+# 这是整个调度系统中最基础的数据单元。
+# ====================================================================
 class Req(ReqDllmMixin):
     """The input and output status of a request."""
 
@@ -547,22 +592,32 @@ class Req(ReqDllmMixin):
         http_worker_ipc: Optional[str] = None,
     ):
         # Input and output info
+        # rid：请求的唯一标识符，就像点菜单上的"桌号"
         self.rid = rid
+        # origin_input_text：用户发来的原始文本（人类可读的"菜名"）
         self.origin_input_text = origin_input_text
         self.origin_input_ids_unpadded = (
             origin_input_ids_unpadded
             if origin_input_ids_unpadded
             else origin_input_ids  # Before image padding
         )
+        # origin_input_ids：原始输入经过分词器后的 Token ID 列表
+        # 比喻：把"菜名"翻译成厨房能理解的"配料编号"
         self.origin_input_ids = origin_input_ids
+        # output_ids：模型已经生成的 Token（已经做好端上桌的菜）
         # Each decode stage's output ids
         self.output_ids = []
+        # fill_ids：完整的 Token 序列 = 输入 + 已生成输出
+        # 比喻：从点菜到上菜的完整记录
         # fill_ids = origin_input_ids + output_ids. Updated if chunked.
         self.fill_ids = []
         self.session_id = session_id
         self.input_embeds = input_embeds
 
         # For req-level memory management
+        # KV 缓存内存管理：像餐厅里为这桌客人预留的餐具位置
+        # kv_committed_len = 已经确认使用的 KV 缓存长度
+        # kv_allocated_len = 已经分配（可能超额分配）的 KV 缓存长度
         self.kv_committed_len = 0
         self.kv_allocated_len = 0
         self.kv_committed_freed = False
@@ -588,7 +643,9 @@ class Req(ReqDllmMixin):
         # Require reasoning for the request (hybrid reasoning model only)
         self.require_reasoning = require_reasoning
 
-        # Sampling info
+        # Sampling info（采样参数）
+        # sampling_params：控制生成行为的参数集合
+        # 比喻：客人的口味偏好卡——temperature（创意程度）、top_p（选菜范围）等
         if isinstance(sampling_params.custom_params, dict):
             sampling_params = copy.copy(sampling_params)
             sampling_params.custom_params = sampling_params.custom_params | {
@@ -608,7 +665,9 @@ class Req(ReqDllmMixin):
         self.lora_id = lora_id
         self.routing_key = routing_key
 
-        # Memory pool info
+        # Memory pool info（内存池信息）
+        # req_pool_idx：这个请求在 GPU 内存池中的"座位号"
+        # 比喻：餐厅大厅里这桌客人的座位编号，用来找到他们的餐具（KV 缓存）
         self.req_pool_idx: Optional[int] = None
         self.mamba_pool_idx: Optional[torch.Tensor] = None  # shape (1)
         self.mamba_ping_pong_track_buffer: Optional[torch.Tensor] = None  # shape (2)
@@ -620,7 +679,8 @@ class Req(ReqDllmMixin):
         # it will be the tracked seqlen in the ping pong buffer for the right prefill pass.
         self.mamba_branching_seqlen: Optional[int] = None
 
-        # Check finish
+        # Check finish（完成状态检查）
+        # 比喻：这道菜做完了吗？是因为做完了（stop token）还是因为做不下了（超长度）？
         self.tokenizer = None
         self.finished_reason: Optional[BaseFinishReason] = None
         # finished position (in output_ids), used when checking stop conditions with speculative decoding
@@ -652,9 +712,12 @@ class Req(ReqDllmMixin):
         # For multimodal inputs
         self.multimodal_inputs: Optional[MultimodalInputs] = None
 
-        # Prefix info
+        # Prefix info（前缀缓存信息）
+        # prefix_indices：已缓存的前缀在 KV 缓存中的索引
+        # 比喻：这道菜的前几步已经提前准备好了（如系统提示词），不需要重新做
         # The indices to kv cache for the shared prefix.
         self.prefix_indices: torch.Tensor = torch.empty((0,), dtype=torch.int64)
+        # extend_input_len：本次需要做 prefill 的 Token 数量（扣除已缓存部分）
         # Number of tokens to run prefill.
         self.extend_input_len = 0
         # The relative logprob_start_len in an extend batch
@@ -750,6 +813,8 @@ class Req(ReqDllmMixin):
         self.grammar: Optional[BaseGrammarObject] = None
         self.grammar_wait_ct = 0
 
+        # cached_tokens：已经在 KV 缓存中命中的 Token 数量
+        # 比喻：这道菜的前几步已经有人做过了（前缀缓存命中），不需要重复做
         # The number of cached tokens that were already cached in the KV cache
         self.cached_tokens = 0
         self.already_computed = 0
@@ -1181,10 +1246,29 @@ class Req(ReqDllmMixin):
         )
 
 
+# ====================================================================
+# ScheduleBatch 类：调度批次（厨师台面上这一轮要做的所有菜单）
+# ====================================================================
+# ScheduleBatch 把多个 Req 打包成一个批次，送给 GPU 统一处理。
+# 就像厨师不会一道一道菜单独做，而是把同一轮的菜单
+# 集中放在台面上，统一备料、统一烹饪，效率更高。
+#
+# 数据流向：ScheduleBatch -> ModelWorkerBatch -> ForwardBatch
+# - ScheduleBatch：高层调度信息（CPU 上的"菜单汇总"）
+# - ModelWorkerBatch：传给 GPU 的子集（"送进厨房的材料"）
+# - ForwardBatch：底层 GPU 张量（"锅里正在炒的菜"）
+#
+# 关键字段：
+# - reqs：这个批次包含的所有请求列表
+# - forward_mode：当前是 Prefill（备菜）还是 Decode（炒菜）
+# - input_ids / seq_lens：送给模型的 Token 数据和序列长度
+# - out_cache_loc：KV 缓存的输出位置（GPU 显存中的"盘子"位置）
+# ====================================================================
 @dataclasses.dataclass
 class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     """Store all information of a batch on the scheduler."""
 
+    # reqs：这个批次里所有的请求（台面上所有的菜单）
     # Request, memory pool, and cache
     reqs: List[Req]
     req_to_token_pool: ReqToTokenPool = None
@@ -1194,6 +1278,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # Batch configs
     model_config: ModelConfig = None
+    # forward_mode：当前批次的执行模式（备菜 Prefill / 炒菜 Decode / 混合 Mixed）
     forward_mode: ForwardMode = None
     enable_overlap: bool = False
     # Tell whether the current running batch is full so that we can skip
@@ -1207,16 +1292,18 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     # Sampling info
     sampling_info: SamplingBatchInfo = None
 
-    # Batched arguments to model runner
-    input_ids: torch.Tensor = None  # shape: [b], int64
-    input_embeds: torch.Tensor = None  # shape: [b, hidden_size], float32
+    # Batched arguments to model runner（送给模型的批量张量数据）
+    # 比喻：把所有菜单上的信息整理成统一的表格，方便厨房批量处理
+    input_ids: torch.Tensor = None  # shape: [b], int64 — 输入 Token ID（这轮要处理的"配料编号"）
+    input_embeds: torch.Tensor = None  # shape: [b, hidden_size], float32 — 输入嵌入向量
     token_type_ids: torch.Tensor = None  # shape: [b], int64
-    req_pool_indices: torch.Tensor = None  # shape: [b], int64
-    seq_lens: torch.Tensor = None  # shape: [b], int64
-    seq_lens_cpu: torch.Tensor = None  # shape: [b], int64
+    req_pool_indices: torch.Tensor = None  # shape: [b], int64 — 每个请求在内存池中的索引
+    seq_lens: torch.Tensor = None  # shape: [b], int64 — 每个请求的序列长度（GPU 上）
+    seq_lens_cpu: torch.Tensor = None  # shape: [b], int64 — 序列长度的 CPU 副本
+    # out_cache_loc：KV 缓存输出位置——新计算的 KV 值应该存放在 GPU 显存的哪个"格子"里
     # The output locations of the KV cache
     out_cache_loc: torch.Tensor = None  # shape: [b], int64
-    output_ids: torch.Tensor = None  # shape: [b], int64
+    output_ids: torch.Tensor = None  # shape: [b], int64 — 本轮生成的 Token ID
 
     # For hybrid GDN prefix cache
     mamba_track_indices: torch.Tensor = None  # shape: [b], int64

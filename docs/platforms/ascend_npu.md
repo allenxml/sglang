@@ -3,6 +3,10 @@
 
 You can install SGLang using any of the methods below. Please go through `System Settings` section to ensure the clusters are roaring at max performance. Feel free to leave an issue [here at sglang](https://github.com/sgl-project/sglang/issues) if you encounter any issues or have any problems.
 
+**中文对照**：# SGLang NPU 安装指南
+
+您可以使用以下任意方法安装 SGLang。请阅读`系统设置`部分以确保集群以最佳性能运行。如果遇到任何问题，请随时在 [SGLang](https://github.com/sgl-project/sglang/issues) 上提交 issue。
+
 ## Component Version Mapping For SGLang
 | Component         | Version                 | Obtain Way                                                                                                                                                                                                                   |
 |-------------------|-------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -242,3 +246,32 @@ python3 -m sglang.launch_server \
     --enable-multimodal \
     --sampling-backend ascend
 ```
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/hardware_backend/npu/` | Ascend NPU 硬件后端根目录：设备特定实现 |
+| `python/sglang/srt/hardware_backend/npu/graph_runner/npu_graph_runner.py` | NPU 图运行器：替代 CUDA 图的 Ascend 原生图捕获 |
+| `python/sglang/srt/hardware_backend/npu/graph_runner/eagle_draft_npu_graph_runner.py` | NPU 的 EAGLE 推测解码图运行器 |
+| `python/sglang/srt/hardware_backend/npu/attention/ascend_backend.py` | Ascend 注意力后端：`--attention-backend ascend` 内核实现 |
+| `python/sglang/srt/hardware_backend/npu/allocator_npu.py` | NPU 内存分配器：Ascend 硬件的设备内存管理 |
+| `python/sglang/srt/hardware_backend/npu/quantization/fused_moe_method_npu.py` | NPU 专用 MoE 量化（ModelSlim W4A8/W8A8） |
+| `python/sglang/srt/lora/backend/ascend_backend.py` | Ascend NPU 上的 LoRA 适配器服务（基于 Triton） |
+| `docker/npu.Dockerfile` | Ascend NPU Docker 镜像构建配置 |
+
+### 关键代码逻辑
+
+- **硬件后端模式**：Ascend 遵循 SGLang 的 `hardware_backend/` 插件架构 — 所有 NPU 专用代码隔离在 `npu/` 目录中
+- **PD 分离**：`--disaggregation-mode prefill/decode --disaggregation-transfer-backend ascend` 使用 MemFabric-Hybrid 进行 KV 缓存传输
+- **NPU 上的 DeepEP**：`sgl-kernel-npu` 提供 DeepEP 兼容库作为 GPU DeepEP 的替代品
+- **CPU 亲和性**：`SGLANG_SET_CPU_AFFINITY=1` 启用 NUMA 感知线程绑定以优化 NPU-主机通信
+
+### 集成要点
+
+- **安装**：使用 `pyproject_npu.toml` 和 `pip install -e python[all_npu]` 安装 Ascend 依赖
+- **Docker 镜像**：提供 Atlas 800I A3（`cann8.5.0-a3`）和 A2（`cann8.5.0-910b`）变体
+- **设备映射**：容器需要 `--device=/dev/davinci[0-15]` 以及 `--device=/dev/davinci_manager --device=/dev/hisi_hdc`
+- **多模态**：NPU 上的 VLM 模型使用 `--mm-attention-backend ascend_attn --sampling-backend ascend`

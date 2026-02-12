@@ -1,3 +1,46 @@
+# ================================================================================
+# 📦 模型加载配置 (Load Config)
+# ================================================================================
+#
+# 【这个文件是什么】What This File Does
+# 这个文件定义了模型权重加载的配置类（LoadConfig），控制如何从磁盘/HuggingFace Hub
+# 加载模型权重，支持多种格式（safetensors、pytorch、GGUF、量化格式等）。
+#
+# 【生活比喻】Metaphor
+# 想象这是一个"图书馆书籍提取规则"：
+# - LoadConfig = 图书管理员的工作手册
+# - load_format = 书籍格式（精装本、电子版、有声书等）
+# - download_dir = 书库位置
+# - decryption_key = 加密书籍的密钥
+#
+# 【核心配置】Key Configurations
+# 1. load_format: 权重文件格式
+#    - auto: 自动检测（优先 safetensors，回退到 pt）
+#    - safetensors: HuggingFace 推荐格式（安全、快速）
+#    - pt: PyTorch 原生格式（.bin 文件）
+#    - gguf: llama.cpp 格式（量化模型）
+#    - bitsandbytes: NF4/INT8 量化格式
+#
+# 2. download_dir: 模型权重下载/缓存目录
+#    - 默认：~/.cache/huggingface/hub
+#    - 可自定义（如挂载的 NFS 共享目录）
+#
+# 3. model_loader_extra_config: 额外加载参数（JSON 格式）
+#    - 用于特殊模型的自定义加载逻辑
+#
+# 4. 量化配置:
+#    - modelopt_config: ModelOpt 量化配置
+#    - rl_quant_profile: RL 量化 profile 文件路径
+#
+# 【使用示例】Usage
+# 加载 AWQ 量化模型：
+#   python -m sglang.launch_server \
+#     --model meta-llama/Llama-3.1-70B-Instruct-AWQ \
+#     --load-format auto \
+#     --download-dir /mnt/models
+#
+# ================================================================================
+
 # Adapted from https://github.com/vllm-project/vllm/blob/v0.6.4.post1/vllm/config.py
 import enum
 import logging
@@ -12,25 +55,41 @@ from sglang.srt.utils import is_hip
 logger = logging.getLogger(__name__)
 
 
+# ======== 模型权重格式枚举 ========
 class LoadFormat(str, enum.Enum):
-    AUTO = "auto"
-    PT = "pt"
-    SAFETENSORS = "safetensors"
-    NPCACHE = "npcache"
-    DUMMY = "dummy"
-    SHARDED_STATE = "sharded_state"
-    GGUF = "gguf"
-    BITSANDBYTES = "bitsandbytes"
-    MISTRAL = "mistral"
-    LAYERED = "layered"
-    FLASH_RL = "flash_rl"  # For RL training with quantized models
-    JAX = "jax"
-    REMOTE = "remote"
-    REMOTE_INSTANCE = "remote_instance"
-    RDMA = "rdma"
-    LOCAL_CACHED = "local_cached"
-    FASTSAFETENSORS = "fastsafetensors"
-    PRIVATE = "private"
+    """
+    模型权重加载格式
+
+    【常用格式】
+    - AUTO: 自动检测（推荐）
+    - SAFETENSORS: HuggingFace 推荐格式（安全、高效）
+    - PT: PyTorch 原生格式（.bin 文件）
+    - GGUF: llama.cpp 量化格式
+    - BITSANDBYTES: NF4/INT8 量化
+
+    【特殊格式】
+    - DUMMY: 随机初始化权重（用于性能测试）
+    - NPCACHE: PyTorch + NumPy 缓存（加速重复加载）
+    - REMOTE: 远程权重加载（跨节点）
+    """
+    AUTO = "auto"  # 自动检测
+    PT = "pt"  # PyTorch 格式（.bin）
+    SAFETENSORS = "safetensors"  # SafeTensors 格式（推荐）
+    NPCACHE = "npcache"  # NumPy 缓存
+    DUMMY = "dummy"  # 虚拟权重（性能测试用）
+    SHARDED_STATE = "sharded_state"  # 分片状态
+    GGUF = "gguf"  # llama.cpp 量化格式
+    BITSANDBYTES = "bitsandbytes"  # BitsAndBytes 量化
+    MISTRAL = "mistral"  # Mistral 格式
+    LAYERED = "layered"  # 分层加载
+    FLASH_RL = "flash_rl"  # RL 训练量化模型 # For RL training with quantized models
+    JAX = "jax"  # JAX 格式
+    REMOTE = "remote"  # 远程加载
+    REMOTE_INSTANCE = "remote_instance"  # 远程实例
+    RDMA = "rdma"  # RDMA 传输
+    LOCAL_CACHED = "local_cached"  # 本地缓存
+    FASTSAFETENSORS = "fastsafetensors"  # 快速 SafeTensors
+    PRIVATE = "private"  # 私有格式
 
 
 @dataclass

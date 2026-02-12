@@ -11,6 +11,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+#
+# ====================================================================
+# 📚 学习导读：服务器参数配置（ServerArgs）
+# ====================================================================
+#
+# 【这个文件是做什么的？】
+# 这个文件定义了 SGLang 推理服务器的所有启动参数。
+# 当你用命令行启动一个大语言模型服务时，所有可以调节的"旋钮"
+# 都在这里定义——从模型路径、服务端口，到内存分配、并行策略等。
+# ServerArgs 是整个系统的"总控制面板"。
+#
+# 【生活比喻】
+# 想象你在开一家餐厅：
+#   - model_path    = 你选择哪位厨师（选择哪个模型）
+#   - host/port     = 餐厅的地址和门牌号（服务监听地址）
+#   - mem_fraction_static = 厨房面积占总面积的比例（GPU显存分配）
+#   - tp_size       = 同时有几位厨师协作做一道菜（张量并行）
+#   - dp_size       = 同时开几个灶台接单（数据并行）
+#   - max_running_requests = 餐厅最多同时接待几桌客人
+# 每个参数都像餐厅的一项经营决策，合理配置才能高效运转。
+#
+# 【核心内容】
+#   1. ServerArgs 数据类 —— 用 @dataclass 定义所有参数及其默认值
+#   2. add_cli_args()   —— 把参数注册为命令行选项（argparse）
+#   3. from_cli_args()  —— 从命令行解析结果构建 ServerArgs 实例
+#   4. 各种常量列表    —— 如 QUANTIZATION_CHOICES、ATTENTION_BACKEND_CHOICES
+#      定义了每个参数的合法取值范围
+#
+# 【阅读建议】
+#   - 初学者：先看 ServerArgs 类的字段定义，了解有哪些可配置项
+#   - 进阶：看 add_cli_args() 了解每个参数的详细说明和默认值逻辑
+#   - 实践：尝试修改参数启动服务，观察不同配置对性能的影响
+#   - 重点关注：model_path, tp_size, mem_fraction_static, dtype 这几个
+#     最常用的参数
+# ====================================================================
+#
 """The arguments of the server."""
 
 from __future__ import annotations
@@ -281,6 +317,11 @@ class ServerArgs:
     """
 
     # Model and tokenizer
+    # ---------- 模型与分词器配置 ----------
+    # model_path: 模型的路径或 HuggingFace 模型名称，这是最重要的参数——告诉服务器"用哪个模型"
+    # tokenizer_path: 分词器路径，通常与模型路径相同，不需要单独设置
+    # load_format: 模型权重的加载格式（如 safetensors、pt 等），一般用 "auto" 自动检测即可
+    # context_length: 模型的上下文窗口长度，决定了一次对话能处理多少文字
     model_path: str
     tokenizer_path: Optional[str] = None
     tokenizer_mode: str = "auto"
@@ -296,6 +337,10 @@ class ServerArgs:
     model_impl: str = "auto"
 
     # HTTP server
+    # ---------- HTTP 服务配置 ----------
+    # host: 服务监听的 IP 地址，"127.0.0.1" 表示仅本机可访问，"0.0.0.0" 表示允许外部访问
+    # port: 服务监听的端口号，默认 30000，就像餐厅的门牌号
+    # 客户端通过 http://host:port 来访问你的模型服务
     host: str = "127.0.0.1"
     port: int = 30000
     fastapi_root_path: str = ""
@@ -306,6 +351,11 @@ class ServerArgs:
     checkpoint_engine_wait_weights_before_ready: bool = False
 
     # Quantization and data type
+    # ---------- 量化与数据类型配置 ----------
+    # dtype: 模型计算时使用的数据类型（如 float16、bfloat16），"auto" 会自动选择
+    # quantization: 量化方法（如 awq、gptq、fp8），量化可以大幅降低显存占用，
+    #   就像把高清照片压缩成缩略图，牺牲一点精度换取更少的资源消耗
+    # kv_cache_dtype: KV缓存的数据类型，影响推理时的显存占用
     dtype: str = "auto"
     quantization: Optional[str] = None
     quantization_param_path: Optional[str] = None
@@ -319,6 +369,12 @@ class ServerArgs:
     rl_quant_profile: Optional[str] = None  # For flash_rl load format
 
     # Memory and scheduling
+    # ---------- 内存管理与调度配置 ----------
+    # mem_fraction_static: GPU 显存中用于模型权重和 KV 缓存的静态比例（0~1之间）
+    #   比喻：就像决定厨房占餐厅总面积的多少，太大浪费空间，太小不够用
+    # max_running_requests: 同时处理的最大请求数，类似餐厅能同时服务的桌数
+    # schedule_policy: 调度策略，"fcfs" 表示先来先服务（First Come First Serve）
+    # chunked_prefill_size: 分块预填充大小，把长输入切成小块处理，避免单次计算过久
     mem_fraction_static: Optional[float] = None
     max_running_requests: Optional[int] = None
     max_queued_requests: Optional[int] = None
@@ -344,6 +400,13 @@ class ServerArgs:
     prefill_delayer_wait_seconds_buckets: Optional[List[float]] = None
 
     # Runtime options
+    # ---------- 运行时选项 ----------
+    # device: 使用的计算设备（如 "cuda" 表示 NVIDIA GPU），通常自动检测
+    # tp_size: 张量并行大小——把模型拆分到多张 GPU 上并行计算
+    #   比喻：一道大菜让多位厨师分工合作，每人负责一部分
+    # pp_size: 流水线并行大小——把模型的不同层分配到不同 GPU
+    #   比喻：像工厂流水线，第一位工人做完传给第二位
+    # random_seed: 随机种子，设置后可以让结果可复现
     device: Optional[str] = None
     tp_size: int = 1
     pp_size: int = 1
@@ -365,6 +428,10 @@ class ServerArgs:
     custom_sigquit_handler: Optional[Callable] = None
 
     # Logging
+    # ---------- 日志与监控配置 ----------
+    # log_level: 日志级别（debug/info/warning/error），控制输出信息的详细程度
+    # enable_metrics: 是否开启 Prometheus 指标监控，用于生产环境的性能观测
+    # show_time_cost: 是否显示每步的时间开销，调试性能时很有用
     log_level: str = "info"
     log_level_http: Optional[str] = None
     log_requests: bool = False
@@ -399,6 +466,10 @@ class ServerArgs:
     export_metrics_to_file_dir: Optional[str] = None
 
     # API related
+    # ---------- API 接口配置 ----------
+    # api_key: API 密钥，用于保护你的服务不被未授权访问，就像餐厅的会员卡
+    # served_model_name: 对外展示的模型名称，客户端看到的是这个名字
+    # chat_template: 对话模板，定义如何将用户消息格式化为模型输入
     api_key: Optional[str] = None
     admin_api_key: Optional[str] = None
     served_model_name: Optional[str] = None
@@ -414,10 +485,18 @@ class ServerArgs:
     sampling_defaults: str = "model"
 
     # Data parallelism
+    # ---------- 数据并行配置 ----------
+    # dp_size: 数据并行大小——启动多个模型副本，每个副本独立处理不同请求
+    #   比喻：开多个相同的灶台，每个灶台独立接单，提升总吞吐量
+    # load_balance_method: 负载均衡策略，决定请求如何分配到不同副本
     dp_size: int = 1
     load_balance_method: str = "auto"
 
     # Multi-node distributed serving
+    # ---------- 多机分布式部署配置 ----------
+    # 当一台机器的 GPU 不够用时，可以把模型部署到多台机器上协同工作
+    # nnodes: 参与的机器数量
+    # node_rank: 当前机器的编号（从0开始）
     dist_init_addr: Optional[str] = None
     nnodes: int = 1
     node_rank: int = 0
@@ -427,6 +506,11 @@ class ServerArgs:
     preferred_sampling_params: Optional[str] = None
 
     # LoRA
+    # ---------- LoRA 适配器配置 ----------
+    # LoRA（低秩适配）是一种高效微调技术，不修改原模型，只加载小的"补丁"权重
+    # 比喻：就像给手机贴不同的手机壳，不改变手机本身，但改变了外观和手感
+    # enable_lora: 是否启用 LoRA 功能
+    # lora_paths: LoRA 权重的路径列表，可以同时加载多个不同的 LoRA
     enable_lora: Optional[bool] = None
     enable_lora_overlap_loading: Optional[bool] = None
     max_lora_rank: Optional[int] = None
@@ -441,6 +525,12 @@ class ServerArgs:
     max_lora_chunk_size: Optional[int] = 16
 
     # Kernel backend
+    # ---------- 计算内核后端配置 ----------
+    # 这些参数控制底层使用哪种算子实现，不同后端在不同硬件上性能各异
+    # attention_backend: 注意力计算的后端（如 flashinfer、triton、fa3 等）
+    # sampling_backend: 采样算法的后端
+    # grammar_backend: 语法约束生成的后端（如 xgrammar）
+    # 一般用默认值即可，除非你在做底层性能优化
     attention_backend: Optional[str] = None
     decode_attention_backend: Optional[str] = None
     prefill_attention_backend: Optional[str] = None

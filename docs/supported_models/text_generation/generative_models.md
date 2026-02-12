@@ -2,6 +2,10 @@
 
 These models accept text input and produce text output (e.g., chat completions). They are primarily large language models (LLMs), some with mixture-of-experts (MoE) architectures for scaling.
 
+**中文对照**：大语言模型
+
+这些模型接受文本输入并产生文本输出（例如，聊天补全）。它们主要是大语言模型（LLM），有些使用混合专家（MoE）架构进行扩展。
+
 ## Example launch Command
 
 ```shell
@@ -10,6 +14,8 @@ python3 -m sglang.launch_server \
   --host 0.0.0.0 \
   --port 30000 \
 ```
+
+**中文对照**：示例启动命令
 
 ## Supported models
 
@@ -22,6 +28,12 @@ repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// Qwen3ForCausalLM
 ```
 
 in the GitHub search bar.
+
+**中文对照**：支持的模型
+
+下表总结了支持的模型。
+
+如果您不确定某个特定架构是否已实现，您可以通过 GitHub 搜索。
 
 | Model Family (Variants)             | Example HuggingFace Identifier                     | Description                                                                            |
 |-------------------------------------|--------------------------------------------------|----------------------------------------------------------------------------------------|
@@ -68,3 +80,21 @@ in the GitHub search bar.
 | **Trinity** (Nano, Mini) | `arcee-ai/Trinity-Mini` | Arcee's foundational MoE Trinity family of models, open weights under Apache 2.0. |
 | **Falcon-H1** (0.5B–34B) | `tiiuae/Falcon-H1-34B-Instruct` | TII's hybrid Mamba-Transformer architecture combining attention and state-space models for efficient long-context inference. |
 | **Hunyuan-Large** (389B, MoE) | `tencent/Tencent-Hunyuan-Large` | Tencent's open-source MoE model with 389B total / 52B active parameters, featuring Cross-Layer Attention (CLA) for improved efficiency. |
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/models/` | 每个模型架构对应一个实现文件（如 `llama.py`、`deepseek_v3.py`、`qwen3.py`、`gpt_oss.py`） |
+| `python/sglang/srt/models/registry.py` | `ModelRegistry`：将 HuggingFace `config.json` 中的 `architectures` 字段映射到对应的模型类 |
+| `python/sglang/srt/configs/model_config.py` | `ModelConfig`：从 HuggingFace 配置自动检测模型类型、参数规模、注意力头数等 |
+| `python/sglang/srt/model_executor/model_runner.py` | `ModelRunner`：执行 prefill（`forward_extend`）和 decode（`forward_decode`）的前向传播 |
+
+### 集成要点
+
+- **架构搜索**：可在 GitHub 上搜索 `repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// ArchitectureName` 确认是否支持
+- **MoE 模型**：DeepSeek V3/R1、Mixtral、DBRX 等使用专家并行（EP）和分组 top-k 路由
+- **启动方式**：所有文本生成模型统一通过 `python3 -m sglang.launch_server --model-path <HF_ID>` 启动
+- **量化支持**：支持 FP8、INT4、AWQ、GPTQ 等多种量化格式，具体参见量化文档

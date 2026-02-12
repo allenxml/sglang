@@ -2,6 +2,8 @@
 
 This guide explains the difference between Data Parallelism (DP) and Data Parallelism Attention (DPA), how to enable each mode correctly, and how to use the SGLang Model Gateway (SMG) for production-grade DP deployments.
 
+**中文对照**：本指南解释了数据并行（DP）和数据并行注意力（DPA）之间的区别，如何正确启用每种模式，以及如何使用 SGLang 模型网关（SMG）进行生产级的 DP 部署。
+
 ## Data Parallelism (DP)
 
 **Data Parallelism (DP)** is the most common parallelism strategy that replicates the entire model across multiple GPU sets and processes different batches of requests in parallel. Each GPU set handles independent requests. With dedicated routing strategies, as we will introduce later, with those proper routing algorithms in SGLang Model Gateway, the throughput of your serving system could be multiplied nearly linearly.
@@ -11,6 +13,16 @@ This guide explains the difference between Data Parallelism (DP) and Data Parall
 - Each replica has a full copy of the model
 - Requests are distributed/scattered across replicas
 - No inter-replica communication during one request's inference (for simple DP)
+
+**中文对照**：## 数据并行（DP）
+
+**数据并行（DP）** 是最常见的并行策略，它在整个模型复制到多组 GPU 上，并行处理不同的请求批次。每组 GPU 处理独立的请求。通过专用的路由策略，正如我们将在后面介绍的，通过 SGLang 模型网关中适当的路由算法，您的服务系统的吞吐量可以几乎线性地倍增。
+
+### 关键特征
+
+- 每个副本都有模型的完整副本
+- 请求在副本之间分布/分散
+- 在单个请求的推理过程中，副本之间没有通信（对于简单 DP）
 
 ## Data Parallelism Attention (DPA)
 
@@ -24,16 +36,21 @@ The most common parallelism strategy for inference is **Tensor Parallelism (TP)*
 - **Unwanted memory usage** that limits batch size
 - **Reduced throughput** due to memory constraints
 
+**中文对照**：## 数据并行注意力（DPA）
+
+**数据并行注意力（DPA）**，也称为 DP 注意力，是一种高级并行策略。虽然 DPA 对**多头潜在注意力（MLA）**模型（如 DeepSeek、Minimax、Kimi-K2）提供最显著的益处，但它也支持像 Qwen 这样的**标准注意力模型**。
+
+### MLA 模型的张量并行问题
+
+推理最常见的并行策略是**张量并行（TP）**。然而，TP 可能不是某些模型的最有效策略。例如，DeepSeek 模型使用 MLA 并且只有**一个 KV 头**。如果我们在 8 个 GPU 上使用张量并行，将导致：
+
+- **所有 GPU 上重复的 KV cache**
+- **不必要的内存使用**限制了批量大小
+- **由于内存限制导致吞吐量降低**
+
 ### How DPA Works
 
 DPA addresses these limitations by applying **data parallelism specifically to the attention component**.
-
-<table>
-<tr>
-<td width="50%">
-<img src="../_static/image/dpa.png" alt="DPA + EP Architecture" width="100%">
-</td>
-<td width="50%" valign="top">
 
 **Each DP replica:**
 
@@ -46,16 +63,34 @@ DPA addresses these limitations by applying **data parallelism specifically to t
 -  **All2All (Dispatch)**: Routes tokens to expert sub-groups based on gating decisions
 - **All2All (Combine)**: Gathers computed results from experts back to original token positions
 
-</td>
-</tr>
-</table>
-
 ### Key benefits of DPA
 
 1. **Significantly reduced KV cache memory**: Each DP replica only stores KV cache for its own batches
 2. **Larger batch sizes**: Memory savings enable larger batch sizes
 3. **Improved decoding throughput**: Significant throughput gains for MLA-based models
 4. **Independent forward modes**: Each DP replica can be in different forward modes (prefill, decode, or idle) and handles its assigned batches independently during attention computation
+
+**中文对照**：### DPA 的工作原理
+
+DPA 通过**专门对注意力组件应用数据并行**来解决这些限制。
+
+**每个 DP 副本：**
+
+- 独立处理不同的批次（可以处于不同的前向模式：预填充、解码或空闲）
+- 维护自己的 KV cache（无重复）
+- 由于内存节省，启用更大的批量大小
+
+**DPA + EP 中的通信模式：**
+-
+- **All2All（分发）**：根据门控决策将令牌路由到专家子组
+- **All2All（合并）**：收集专家的计算结果回到原始令牌位置
+
+### DPA 的主要益处
+
+1. **显著减少 KV cache 内存**：每个 DP 副本只为自己的批次存储 KV cache
+2. **更大的批量大小**：内存节省启用更大的批量大小
+3. **改进的解码吞吐量**：对基于 MLA 的模型有显著的吞吐量提升
+4. **独立的前向模式**：每个 DP 副本可以处于不同的前向模式（预填充、解码或空闲），并在注意力计算期间独立处理其分配的批次
 
 ### DPA with Expert Parallelism for MoE
 
@@ -64,6 +99,14 @@ For MoE models like DeepSeek, DPA is **often** paired with Expert Parallelism (E
 - Distribute 256+ expert weights across GPUs (cannot fit on a single GPU)
 - Enable efficient all-to-all token routing via DeepEP
 - Scale to large clusters (up to 5x throughput improvement over vanilla TP)
+
+**中文对照**：### MoE 的 DPA 与专家并行
+
+对于像 DeepSeek 这样的 MoE 模型，DPA **通常**与专家并行（EP）配对以获得最佳的规模化吞吐量。但是，**DPA 不需要 EP**：如果您的部署不需要专家分片，您可以启用 DPA 而不使用 EP。
+
+- 跨 GPU 分布 256+ 专家权重（无法容纳在单个 GPU 上）
+- 通过 DeepEP 启用高效的 all-to-all 令牌路由
+- 扩展到大型集群（相比普通 TP 最高可达 5 倍吞吐量提升）
 
 ### Recommended setup for DeepSeek
 
@@ -79,6 +122,8 @@ python -m sglang.launch_server \
 ```
 
 > **Note**: `--dp-size` must be explicitly set when using `--enable-dp-attention`. If `dp_size` is 1 (default), DPA will be disabled.
+
+**中文对照**：> **注意**：使用 `--enable-dp-attention` 时必须显式设置 `--dp-size`。如果 `dp_size` 为 1（默认值），DPA 将被禁用。
 
 For detailed EP configuration (DeepEP, Two-Batch Overlap, EPLB), see [Expert Parallelism](expert_parallelism.md).
 
@@ -97,6 +142,19 @@ DPA supports the following model architectures:
 
 For models like Llama, with standard GQA, standard DP, or TP is typically recommended.
 
+**中文对照**：DPA 支持以下模型架构：
+
+- **MLA（多头潜在注意力）模型** - DPA 在这些模型上提供最显著的益处：
+  - DeepSeek 系列（DeepSeek-V2、DeepSeek-V3、DeepSeek-R1）
+  - MiniMax 模型
+  - Kimi-K2
+  - 其他使用 MLA 架构的模型
+
+- **标准注意力模型** - 也支持：
+  - Qwen 模型（参见 [PR #6121](https://github.com/sgl-project/sglang/pull/6121)）
+
+对于像 Llama 这样具有标准 GQA 的模型，通常推荐使用标准 DP 或 TP。
+
 To enable DPA, add `--enable-dp-attention` to your server launch command.
 
 ### Activation Logic
@@ -112,6 +170,18 @@ python -m sglang.launch_server \
 ```
 
 **Important**: `--dp-size` must be greater than 1 for DPA to work. When `dp_size == 1` (default), `--enable-dp-attention` is automatically disabled. The constraint `tp_size % dp_size == 0` must also be satisfied.
+
+**中文对照**：DPA 通过服务器参数（CLI 或配置）显式启用。您必须同时设置 `--dp-size` 和 `--enable-dp-attention`：
+
+```bash
+python -m sglang.launch_server \
+    --model-path deepseek-ai/DeepSeek-V3 \
+    --tp 8 \
+    --dp-size 8 \
+    --enable-dp-attention
+```
+
+**重要提示**：DPA 要工作，`--dp-size` 必须大于 1。当 `dp_size == 1`（默认值）时，`--enable-dp-attention` 会自动禁用。还必须满足约束条件 `tp_size % dp_size == 0`。
 
 ### Standard DP for MLA models
 
@@ -349,6 +419,40 @@ sglang_cache_hit_rate{source="..."}
 ```
 
 For detailed metrics and monitoring setup, see [SGLang Model Gateway Documentation](sgl_model_gateway.md).
+
+## 代码实现
+
+### 核心文件
+- [../../python/sglang/srt/managers/data_parallel_controller.py](../../python/sglang/srt/managers/data_parallel_controller.py): Implements the native DP orchestrator that dispatches requests to multiple worker processes. It manages inter-process communication via ZMQ and applies load-balancing strategies to distribute traffic.
+- [../../python/sglang/srt/managers/scheduler_dp_attn_mixin.py](../../python/sglang/srt/managers/scheduler_dp_attn_mixin.py): Provides the logic for DP Attention (DPA) synchronization. It defines the `MLPSyncBatchInfo` structure and handles collective communication (All-Gather) to align batch metadata across DP ranks.
+- [../../python/sglang/srt/managers/scheduler.py](../../python/sglang/srt/managers/scheduler.py): Integrates DP and DPA logic by inheriting from the respective mixins. It coordinates the request lifecycle and triggers batch synchronization before model execution.
+- **SGLang Model Gateway (SMG)**: Implemented in Rust (under `sgl-model-gateway/`), it provides a high-performance router with advanced cache-aware policies, intended for production-grade deployments.
+
+### 架构
+DP 架构使用集中式的 `DataParallelController`，它接收分词后的请求并将其路由到独立的 worker 副本。在标准 DP 中，workers 是隔离的。然而，在 **DPA（DP Attention）** 模式下，同一 TP 组内的 workers 在前向传播期间协作。这通过使用 NCCL 或基于 CPU 的 All-Gather 在所有 DP ranks 间同步批次元数据（token 数量、forward 模式）来实现。这种协调允许 MLA 模型在每个副本上存储唯一的 KV 缓存，同时共享权重，有效消除内存重复。
+
+### 关键代码逻辑
+DP 预算管理器根据最少的待处理 tokens 或请求数选择目标 worker：
+```python
+# From data_parallel_controller.py
+target_rank = min(range(self.dp_size), key=lambda i: (self.total_tokens[i], self.total_requests[i]))
+```
+DPA 通过在进程组间收集批次信息确保所有副本对齐：
+```python
+# From scheduler_dp_attn_mixin.py
+torch.distributed.all_gather_into_tensor(global_info_tensor.flatten(), local_info_tensor, group=group)
+```
+集成 SMG 允许跨多个节点进行可扩展的缓存感知路由：
+```bash
+# Integration via SMG launcher
+python -m sglang_router.launch_server --model-path <path> --dp-size 4 --router-policy cache_aware
+```
+
+### 集成要点
+- **--dp-size**：指定数据并行副本的数量
+- **--enable-dp-attention**：在调度器和模型执行器中启用 DPA 同步逻辑
+- **--load-balance-method**：配置原生 DP 路由策略（例如 `total_tokens`、`round_robin`）
+- **SMG 配置**：使用 `sglang_router` 入口点获得生产级功能，如熔断器和 Prometheus 监控
 
 ## Reference
 

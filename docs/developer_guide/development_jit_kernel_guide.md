@@ -6,36 +6,71 @@ We strongly recommend using `clangd` as the language server for JIT kernel devel
 For Ubuntu/Debian, you can download clangd from [apt.llvm.org](https://apt.llvm.org/).
 If you are using VS Code, we recommend installing the `clangd` extension for better IDE integration.
 
+**中文对照**：## 环境设置
+
+我们强烈建议使用 `clangd` 作为 JIT 内核开发的语言服务器。对于 Ubuntu/Debian，你可以从 [apt.llvm.org](https://apt.llvm.org/) 下载 clangd。如果你使用 VS Code，我们建议安装 `clangd` 扩展以获得更好的 IDE 集成。
+
 All JIT-related files are located in `python/sglang/jit_kernel`.
 Unlike `sgl-kernel`, which compiles CUDA/C++ binaries ahead of time (AOT), just-in-time (JIT) kernels are compiled at runtime.
 Consequently, a static `compile_commands.json` cannot be generated.
 To enable code completion with `clangd`, run `python -m sglang.jit_kernel` to generate a `.clangd` configuration file in your current directory.
 After generating the file, restart the clangd language server. It should now recognize all JIT kernel files.
 
+**中文对照**：所有 JIT 相关文件位于 `python/sglang/jit_kernel`。
+与提前编译 CUDA/C++ 二进制文件的 `sgl-kernel` 不同，just-in-time (JIT) 内核在运行时编译。
+因此，无法生成静态 `compile_commands.json`。
+要启用 `clangd` 的代码补全功能，运行 `python -m sglang.jit_kernel` 在当前目录生成 `.clangd` 配置文件。
+生成文件后，重启 clangd 语言服务器。它现在应该能够识别所有 JIT 内核文件。
+
 ## Code Structure
+
+**中文对照**：## 代码结构
 
 ### C++ Implementation
 
 C++ source code is located in `python/sglang/jit_kernel/csrc`.
 Reusable functions should be placed in `python/sglang/jit_kernel/include`.
 
+**中文对照**：### C++ 实现
+
+C++ 源代码位于 `python/sglang/jit_kernel/csrc`。
+可重用函数应放置在 `python/sglang/jit_kernel/include` 中。
+
 We use [tvm-ffi](https://github.com/apache/tvm-ffi) for efficient foreign language bindings.
 Refer to the [documentation](https://tvm.apache.org/ffi/) for advanced usage, such as exporting C++ objects.
 Typically, `tvm::ffi::TensorView` is sufficient for passing PyTorch Tensors from Python.
 
+**中文对照**：我们使用 [tvm-ffi](https://github.com/apache/tvm-ffi) 来实现高效的外语绑定。
+有关高级用法（例如导出 C++ 对象），请参阅[文档](https://tvm.apache.org/ffi/)。
+通常，`tvm::ffi::TensorView` 对于从 Python 传递 PyTorch 张量已经足够。
+
 ### Python Interface
+
+**中文对照**：### Python 接口
 
 Python interfaces are defined in `python/sglang/jit_kernel`.
 The `load_jit` utility function in `python/sglang/jit_kernel/utils.py` loads and returns the compiled module.
 To export a C++ function (e.g., `cpp_func`), pass `cuda_wrappers=[("func", "cpp_func")]` to `load_jit`.
 The function can then be called in Python as `module.func`.
 
+**中文对照**：Python 接口定义在 `python/sglang/jit_kernel` 中。
+`python/sglang/jit_kernel/utils.py` 中的 `load_jit` 实用函数加载并返回编译后的模块。
+要导出 C++ 函数（例如 `cpp_func`），将 `cuda_wrappers=[("func", "cpp_func")]` 传递给 `load_jit`。
+然后可以在 Python 中调用该函数为 `module.func`。
+
 For caching compiled modules, prefer `sglang.jit_kernel.utils.cache_once` over `functools.lru_cache`.
 `functools.lru_cache` is not compatible with `torch.compile`.
+
+**中文对照**：对于缓存编译后的模块，优先使用 `sglang.jit_kernel.utils.cache_once` 而不是 `functools.lru_cache`。
+`functools.lru_cache` 与 `torch.compile` 不兼容。
 
 ### C++ Utilities
 
 The following C++ utilities are available:
+
+**中文对照**：### C++ 实用工具
+
+以下 C++ 实用工具可用：
 
 #### Integer Range
 
@@ -55,6 +90,10 @@ void test() {
 
 ```
 
+**中文对照**：#### 整数范围
+
+与 PyTorch 类似，我们提供 `irange` 函数来表示整数范围。
+
 #### Runtime Checking
 
 `RuntimeCheck` validates conditions at runtime. It accepts optional arguments for error reporting.
@@ -73,6 +112,16 @@ void test() {
 }
 
 ```
+
+**中文对照**：#### 运行时检查
+
+`RuntimeCheck` 在运行时验证条件。它接受可选参数用于错误报告。
+如果检查失败，这些参数将输出以帮助调试。
+`RuntimeDeviceCheck` 验证最后一次内核启动的状态。
+
+#### Tensor Checking
+
+**中文对照**：#### 张量检查
 
 #### Tensor Checking
 
@@ -112,6 +161,20 @@ Use `.unwrap()` to retrieve the matched value after verification.
 
 > Tip: Add `//` at the end of the `TensorMatcher` chain to enforce proper indentation.
 
+**中文对照**：在验证之前，使用预期的步幅、dtype 和设备属性配置 `TensorMatcher`。
+- 如果省略 `with_strides`，则期望张量是连续的。
+- `with_dtype` 中的模板参数限制允许的数据类型。
+- `with_device` 中的模板参数限制允许的设备。
+- 传递给 `with_xxx` 方法的值强制执行相等性检查。
+- 对于大小或步幅传递 `-1` 允许匹配任何值。
+
+`Symbolic` 变量必须在所有验证中解析为相同的值。
+使用 `.unwrap()` 在验证后检索匹配的值。
+
+> 注意：`TensorMatcher` 是一个临时表达式，不应存储在变量中。
+
+> 提示：在 `TensorMatcher` 链末尾添加 `//` 以强制执行正确的缩进。
+
 #### Kernel Launching
 
 `LaunchKernel::resolve_device` retrieves the current `cudaStream` from PyTorch.
@@ -137,6 +200,11 @@ void test() {
 }
 
 ```
+
+**中文对照**：#### 内核启动
+
+`LaunchKernel::resolve_device` 从 PyTorch 检索当前的 `cudaStream`。
+内核也可以使用 `LaunchKernel` 直接启动。
 
 ## Add new kernels
 
@@ -257,3 +325,27 @@ from sglang.jit_kernel.add_constant import add_constant
 ```
 
 For a complete, runnable example, refer to [test_add_constant.py](../../python/sglang/jit_kernel/tests/test_add_constant.py).
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/jit_kernel/` | JIT 内核根目录：Python 接口 + 构建系统 |
+| `python/sglang/jit_kernel/csrc/` | C++/CUDA 内核源文件（`.cu`、`.cuh`） |
+| `python/sglang/jit_kernel/include/` | 可重用 C++ 头文件（`sgl_kernel/utils.h`、`sgl_kernel/tensor.h`、`sgl_kernel/utils.cuh`） |
+| `python/sglang/jit_kernel/utils.py` | `load_jit()` 构建工具、`cache_once` 装饰器（torch.compile 兼容）、`make_cpp_args` |
+
+### 关键代码逻辑
+
+- **JIT 编译**：`load_jit()` 使用 tvm-ffi 在运行时编译 CUDA/C++ 文件；返回包含可调用 Python 函数的模块
+- **张量验证**：`TensorMatcher` 配合 `SymbolicSize`/`SymbolicDType`/`SymbolicDevice` 进行声明式张量形状/类型检查
+- **内核启动**：`LaunchKernel(grid, block, device)` 解析 PyTorch CUDA 流并启动，自动错误检查
+- **缓存**：`cache_once` 装饰器（而非 `lru_cache`）确保编译模块的 torch.compile 兼容性
+
+### 集成要点
+
+- **IDE 设置**：运行 `python -m sglang.jit_kernel` 生成 `.clangd` 配置以启用代码补全
+- **添加内核**：3 步流程 — 在 `csrc/` 中编写 `.cuh` → 使用 `load_jit()` 创建 Python 包装器 → 导入并使用
+- **vs sgl-kernel**：JIT 内核在运行时编译；`sgl-kernel` 提前编译（AOT）并作为独立 PyPI 包发布

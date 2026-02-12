@@ -6,6 +6,12 @@ This document provides commands for evaluating models' accuracy and performance.
 
 [Reference: MiniMax M2](https://github.com/sgl-project/sglang/pull/12129)
 
+**中文对照**：# 使用 SGLang 评估新模型
+
+本文档提供了用于评估模型准确性和性能的命令。在开源新模型之前，我们强烈建议你运行这些命令以验证分数是否与内部基准测试结果匹配。
+
+**为了交叉验证，请在开源模型时提交安装、服务器启动和基准测试运行的命令，以及所有分数和硬件要求。**
+
 ## Accuracy
 
 ### LLMs
@@ -144,3 +150,22 @@ For each evaluation, please report:
 2.  **Environment settings**: GPU type/count, SGLang commit hash.
 3.  **Launch configuration**: Model path, TP size, and any special flags.
 4.  **Evaluation parameters**: Number of shots, examples, max tokens.
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/test/run_eval.py` | 统一评估运行器：MMLU、GPQA、HumanEval，可配置参数 |
+| `python/sglang/test/few_shot_gsm8k.py` | GSM8K few-shot 准确性评估（快速完整性检查） |
+| `python/sglang/bench_serving.py` | 性能基准测试：延迟（TTFT）和吞吐量（tok/s） |
+| `python/sglang/bench_one_batch.py` | 单批次离线性能基准测试 |
+| `benchmark/mmmu/bench_sglang.py` | VLM 的 MMMU 多模态基准测试 |
+| `benchmark/hellaswag/bench_sglang.py` | HellaSwag 常识推理基准测试 |
+
+### 集成要点
+
+- **准确性评估**：`python -m sglang.test.run_eval --eval-name mmlu|gpqa|humaneval`，推理模型使用 `--thinking-mode`
+- **性能评估**：`python -m sglang.bench_serving` 配合 `--max-concurrency 1`（延迟）或 `--max-concurrency 100`（吞吐量）
+- **VLM 评估**：`benchmark/mmmu/bench_sglang.py` 配合 `--concurrency` 用于多模态模型评估

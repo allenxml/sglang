@@ -224,3 +224,23 @@ echo "Build and push completed successfully!"
 - [FlashInfer](https://github.com/flashinfer-ai/flashinfer) is the default attention kernel backend. It only supports sm75 and above. If you encounter any FlashInfer-related issues on sm75+ devices (e.g., T4, A10, A100, L4, L40S, H100), please switch to other kernels by adding `--attention-backend triton --sampling-backend pytorch` and open an issue on GitHub.
 - To reinstall flashinfer locally, use the following command: `pip3 install --upgrade flashinfer-python --force-reinstall --no-deps` and then delete the cache with `rm -rf ~/.cache/flashinfer`.
 - When encountering `ptxas fatal   : Value 'sm_103a' is not defined for option 'gpu-name'` on B300/GB300, fix it with `export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas`.
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/setup.py` | 安装配置：定义 `sglang`、`sglang[all]`、`sglang[diffusion]`、`sglang[tracing]` 等安装选项；自动编译 protobuf 文件 |
+| `python/sglang/launch_server.py` | 服务启动入口：`python -m sglang.launch_server` 的主入口点 |
+| `python/sglang/srt/entrypoints/http_server.py` | HTTP 服务器：FastAPI 应用，提供 OpenAI 兼容的 API 端点 |
+| `docker/Dockerfile` | Docker 镜像构建：`lmsysorg/sglang:latest`（完整版）和 `latest-runtime`（精简版，约 40% 体积缩减） |
+| `docker/sagemaker.Dockerfile` | AWS SageMaker 部署专用 Dockerfile |
+| `docker/k8s-sglang-service.yaml` | Kubernetes 单节点部署配置 |
+
+### 集成要点
+
+- **推荐安装**：使用 `uv pip install sglang` 获得最快安装速度
+- **CUDA 13 支持**：B300/GB300 需使用 `lmsysorg/sglang:dev-cu13` Docker 镜像或手动安装 CUDA 13 版本的 PyTorch 和 sgl_kernel
+- **FlashInfer 依赖**：默认注意力后端，仅支持 SM75 及以上 GPU；遇到问题可切换到 `--attention-backend triton --sampling-backend pytorch`
+- **部署方式**：支持 pip/uv 安装、源码安装、Docker、Kubernetes（OME 运营商）、Docker Compose、SkyPilot、AWS SageMaker 共 7 种部署方式

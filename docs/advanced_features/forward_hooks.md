@@ -10,6 +10,18 @@ This is useful for:
 
 Hooks are attached once during `ModelRunner.initialize` and run on every forward pass.
 
+**中文对照**：## 模型钩子
+
+SGLang 支持将 PyTorch 前向钩子附加到加载模型中的特定子模块，完全通过 `server_args` JSON 配置。
+
+这对于以下情况很有用：
+
+* 记录中间激活
+* 调试模型内部
+* 将隐藏状态导出到外部工具
+
+钩子在 `ModelRunner.initialize` 期间附加一次，并在每次前向传递时运行。
+
 ---
 
 ### Configuration overview
@@ -48,6 +60,43 @@ In JSON form, a minimal configuration looks like:
   * Which modules to target
   * Which Python factory to call
   * What configuration to pass into that factory
+
+**中文对照**：### 配置概述
+
+钩子通过 `ServerArgs` 字段配置：
+
+```python
+class ServerArgs:
+    ...
+    # For forward hooks
+    forward_hooks: Optional[List[dict[str, Any]]] = None
+````
+
+在 JSON 形式中，最小配置如下：
+
+```jsonc
+{
+  "forward_hooks": [
+    {
+      "name": "outer_linear_hooks",
+      "target_modules": ["outer.0", "outer.1"],
+      "hook_factory": "my_project.hooks:dummy_hook_factory",
+      "config": {
+        "tag": "outer-layer"
+      }
+    }
+  ]
+}
+```
+
+#### 顶级字段
+
+* `forward_hooks`（可选的对象列表）
+  每个元素是一个钩子规范，描述：
+
+  * 要定位哪些模块
+  * 调用哪个 Python 工厂
+  * 将什么配置传递到该工厂
 
 ---
 
@@ -295,3 +344,46 @@ This will:
 
   * **fatal and explicit** (bad path / missing attribute), or
   * **non-fatal with clear warnings** (no targets matched, or factory returned `None`).
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/model_executor/hook_manager.py` | `register_forward_hooks()` 和 `resolve_callable()` 实现——模式匹配、工厂解析、hook附加 |
+| `python/sglang/srt/model_executor/model_runner.py` | 在 `initialize()` 期间调用 `register_forward_hooks(self.model, server_args.forward_hooks)` |
+| `python/sglang/srt/server_args.py` | 在 `ServerArgs` 数据类中定义 `forward_hooks: Optional[List[dict]]` 字段 |
+
+### 架构
+
+```
+[ServerArgs JSON] ──parse──▶ forward_hooks: List[dict]
+                                    │
+                                    ▼
+[ModelRunner.initialize()]
+        │
+        ▼
+register_forward_hooks(model, hook_specs)
+        │
+        ├── resolve_callable(hook_factory_path)  →  Python factory function
+        │         │
+        │         ▼
+        │   factory(config) → hook function
+        │
+        ├── fnmatch patterns vs model.named_modules()  →  matched modules
+        │
+        └── module.register_forward_hook(hook)  →  attached on every forward pass
+```
+
+### 关键代码逻辑
+
+- **工厂解析**: `hook_manager.py` 中的 `resolve_callable()` 通过 `importlib.import_module()` 支持 `module:factory` 和 `module.submodule.factory` 导入路径
+- **模式匹配**: 对 `model.named_modules()` 使用 `fnmatch.fnmatch()` 查找目标子模块（支持像 `model.layers.*.mlp` 这样的glob模式）
+- **生命周期**: 通过 `module.register_forward_hook()` 在启动时附加一次hooks，并在每次前向传递时运行；不存储句柄（无运行时移除API）
+
+### 集成要点
+
+- **配置**: 在 `ServerArgs` JSON配置中或通过 `--json-model-override-args` 传递 `forward_hooks` 列表
+- **Hook工厂**: 用户定义的Python函数，接受 `config: dict` 并返回 `(module, inputs, output)` 可调用对象
+- **错误处理**: 错误的导入路径在启动时快速失败；不匹配的模式和返回 `None` 的工厂会发出警告并继续

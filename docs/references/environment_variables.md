@@ -2,7 +2,11 @@
 
 SGLang supports various environment variables that can be used to configure its runtime behavior. This document provides a comprehensive list and aims to stay updated over time.
 
+**中文对照**：SGLang 支持多种环境变量，可用于配置其运行时行为。本文档提供了完整的列表，并致力于保持更新。
+
 *Note: SGLang uses two prefixes for environment variables: `SGL_` and `SGLANG_`. This is likely due to historical reasons. While both are currently supported for different settings, future versions might consolidate them.*
+
+**中文对照**：注意：SGLang 使用两个前缀的环境变量：`SGL_` 和 `SGLANG_`。这可能是由于历史原因。虽然目前两者都支持不同的设置，但未来版本可能会合并它们。
 
 ## General Configuration
 
@@ -168,3 +172,22 @@ SGLang supports various environment variables that can be used to configure its 
 | Environment Variable | Description | Default Value |
 | --- | --- | --- |
 | `SGLANG_TOOL_STRICT_LEVEL` | Controls the strictness level of tool call parsing and validation. <br>**Level 0**: Off - No strict validation <br>**Level 1**: Function strict - Enables structural tag constraints for all tools (even if none have `strict=True` set) <br>**Level 2**: Parameter strict - Enforces strict parameter validation for all tools, treating them as if they all have `strict=True` set | `0` |
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/utils.py` | 大多数 `SGLANG_*` / `SGL_*` 环境变量通过 `os.environ` 读取的主要位置 |
+| `python/sglang/srt/server_args.py` | 一些环境变量用作 CLI 参数的默认值（例如 `SGLANG_HOST_IP`、`SGLANG_PORT`） |
+| `python/sglang/srt/managers/scheduler.py` | 调度器读取性能调优环境变量（recv skipper 权重、超时、编译设置） |
+| `python/sglang/srt/model_executor/model_runner.py` | 模型运行器读取 DeepGEMM、量化和分析环境变量 |
+| `python/sglang/srt/layers/moe/fused_moe_triton/layer.py` | MoE 层读取 DeepEP 和 MORI 配置环境变量 |
+| `python/sglang/srt/managers/scheduler_profiler_mixin.py` | 分析器读取 `SGLANG_TORCH_PROFILER_DIR` 及相关环境变量 |
+
+### 集成要点
+
+- **两个前缀**：历史上同时使用 `SGL_` 和 `SGLANG_`；搜索变量时请检查两者
+- **运行时读取**：大多数环境变量在导入时或初始化期间读取；服务器启动后更改无效
+- **Docker 默认值**：某些变量在 Docker 镜像中预设（例如 `SGLANG_SET_CPU_AFFINITY=1`、`SGLANG_MOE_PADDING=1`）

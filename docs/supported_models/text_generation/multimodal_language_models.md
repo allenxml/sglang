@@ -2,6 +2,10 @@
 
 These models accept multi-modal inputs (e.g., images and text) and generate text output. They augment language models with multimodal encoders.
 
+**中文对照**：多模态语言模型
+
+这些模型接受多模态输入（例如，图像和文本）并生成文本输出。它们通过多模态编码器增强语言模型。
+
 ## Example launch Command
 
 ```shell
@@ -12,6 +16,10 @@ python3 -m sglang.launch_server \
 ```
 
 > See the [OpenAI APIs section](https://docs.sglang.io/basic_usage/openai_api_vision.html) for how to send multimodal requests.
+
+**中文对照**：示例启动命令
+
+请参阅 [OpenAI API 部分](https://docs.sglang.io/basic_usage/openai_api_vision.html) 了解如何发送多模态请求。
 
 ## Supported models
 
@@ -24,6 +32,12 @@ repo:sgl-project/sglang path:/^python\/sglang\/srt\/models\// Qwen2_5_VLForCondi
 ```
 
 in the GitHub search bar.
+
+**中文对照**：支持的模型
+
+下表总结了支持的模型。
+
+如果您不确定某个特定架构是否已实现，您可以通过 GitHub 搜索。
 
 
 | Model Family (Variants)    | Example HuggingFace Identifier             | Description                                                                                                                                                                                                     | Notes |
@@ -57,6 +71,8 @@ in the GitHub search bar.
 
 SGLang supports video input for Vision-Language Models (VLMs), enabling temporal reasoning tasks such as video question answering, captioning, and holistic scene understanding. Video clips are decoded, key frames are sampled, and the resulting tensors are batched together with the text prompt, allowing multimodal inference to integrate visual and linguistic context.
 
+**中文对照**：视频输入支持
+
 | Model Family | Example Identifier | Video notes |
 |--------------|--------------------|-------------|
 | **Qwen-VL** (Qwen2-VL, Qwen2.5-VL, Qwen3-VL, Qwen3-Omni) | `Qwen/Qwen3-VL-235B-A22B-Instruct` | The processor gathers `video_data`, runs Qwen's frame sampler, and merges the resulting features with text tokens before inference. |
@@ -68,7 +84,11 @@ SGLang supports video input for Vision-Language Models (VLMs), enabling temporal
 
 Use `sgl.video(path, num_frames)` when building prompts to attach clips from your SGLang programs.
 
+**中文对照**：使用 `sgl.video(path, num_frames)` 在构建提示时附加片段。
+
 Example OpenAI-compatible request that sends a video clip:
+
+**中文对照**：发送视频剪辑的 OpenAI 兼容请求示例：
 
 ```python
 import requests
@@ -109,11 +129,17 @@ For multimodal models, you can use the `--keep-mm-feature-on-device` flag to opt
 
 Use this flag when you have sufficient GPU memory and want to minimize latency for multimodal inference.
 
+**中文对照**：使用说明
+
+### 性能优化
+
 ### Multimodal Inputs Limitation
 
 - **Use `--mm-process-config '{"image":{"max_pixels":1048576},"video":{"fps":3,"max_pixels":602112,"max_frames":60}}'`**: To set `image`, `video`, and `audio` input limits.
 
 This can reduce GPU memory usage, improve inference speed, and help to avoid OOM, but may impact model performance, thus set a proper value based on your specific use case. Currently, only `qwen_vl` supports this config. Please refer to [qwen_vl processor](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/multimodal/processors/qwen_vl.py) for understanding the meaning of each parameter.
+
+**中文对照**：多模态输入限制
 
 ### Bidirectional Attention in Multimodal Model Serving
 **Note for serving the Gemma-3 multimodal model**:
@@ -134,3 +160,25 @@ python -m sglang.launch_server \
 ```
 
 If higher serving performance is required and a certain degree of accuracy loss is acceptable, you may choose to use other attention backends, and you can also enable features like CUDA Graph and Chunked Prefill for better performance, but note that the model will fall back to using causal attention instead of bidirectional attention.
+
+**中文对照**：多模态模型服务中的双向注意力
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/models/` | 多模态模型实现：如 `qwen2_vl.py`、`llava.py`、`gemma3.py` 等 |
+| `python/sglang/srt/multimodal/processors/` | 多模态处理器：每个 VLM 系列对应一个 `BaseMultimodalProcessor` 子类，处理图像/视频预处理 |
+| `python/sglang/srt/multimodal/mm_utils.py` | 多模态工具函数：图像解码、视频帧采样、特征张量管理 |
+| `python/sglang/srt/multimodal/vit_cuda_graph_runner.py` | ViT CUDA Graph 运行器：为视觉编码器捕获 CUDA Graph 以加速推理 |
+| `python/sglang/srt/configs/model_config.py` | `is_multimodal_model()`：判断模型是否为多模态类型 |
+
+### 集成要点
+
+- **启用多模态**：部分模型需要 `--enable-multimodal` 标志或 `--chat-template` 参数
+- **图像特征缓存**：`--keep-mm-feature-on-device` 保持特征在 GPU 上以降低延迟（增加显存占用）
+- **输入限制**：通过 `--mm-process-config` 设置图像/视频的最大分辨率和帧数限制
+- **视频支持**：支持 Qwen-VL、GLM-4v、NVILA、LLaVA 等系列的视频输入，通过 `video_url` 字段传入
+- **双向注意力**：Gemma-3 多模态需使用 Triton 注意力后端，并禁用 CUDA Graph 和 Chunked Prefill

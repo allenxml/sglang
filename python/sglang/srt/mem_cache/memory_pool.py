@@ -15,6 +15,33 @@ limitations under the License.
 
 from __future__ import annotations
 
+# ============================================================================
+# 【学习注释】Memory Pool - GPU显存分页管理系统
+# ============================================================================
+#
+# 【这是什么】What: GPU memory allocator for KV cache (paged memory management)
+# 这是一个为 Transformer 模型的 KV cache 设计的 GPU 显存管理系统
+#
+# 【比喻理解】Metaphor: 就像操作系统的虚拟内存系统
+# - 传统方法：为每个请求分配一整块连续内存（就像给每个程序分配一大块连续RAM）
+# - 分页方法：将内存切分成固定大小的"页"（pages），请求可以使用不连续的多个页
+# - 优势：避免内存碎片化，提高利用率（就像操作系统的虚拟内存可以更灵活地使用物理RAM）
+#
+# 【为什么需要】Why: Prevents memory fragmentation, enables efficient sharing
+# 1. 防止碎片化：避免因请求长度不同导致的内存碎片
+# 2. 动态增长：请求可以按需增加页数，无需预分配大块内存
+# 3. 高效共享：Radix Attention 可以让多个请求共享相同的 prefix 页
+#
+# 【核心类】Key Classes:
+# 1. ReqToTokenPool: 映射请求ID到token位置的索引表（逻辑层）
+# 2. KVCache (abstract): KV cache的物理存储抽象基类
+#    - MHATokenToKVPool: 多头注意力的KV存储（标准Transformer）
+#    - MLATokenToKVPool: 多latent注意力的KV存储（DeepSeek等）
+#    - NSATokenToKVPool: Neighbor-aware Sparse Attention的KV存储
+# 3. MemoryPool管理策略: alloc()分配, free()释放, move_kv_cache()碎片整理
+#
+# ============================================================================
+
 """
 Memory pool.
 

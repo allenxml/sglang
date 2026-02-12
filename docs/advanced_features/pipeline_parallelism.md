@@ -6,8 +6,17 @@ As Large Language Models (LLMs) scale toward trillion-parameter architectures an
 
 Detailed analysis can be found in this [blog](https://lmsys.org/blog/2026-01-15-chunked-pipeline/).
 
-## Implementation Refactoring based on Async Communication
-With Dynamic Chunked Prefill, pipeline parallelism has the potential to reduce the TTFT of long-context inputs. For each request, its input tokens can be partitioned into multiple chunks, each no longer than the chunked prefill size. Different chunks of the same request can be processed simultaneously by different nodes, thus parallelizing the processing and reducing TTFT. SGLang has supported Pipeline Parallelism (#5724) for some time and made it compatible with the PD Disaggregation feature (#8846), but the implementation was not perfect and had significant room for performance improvements.
+**中文对照**：# 用于长上下文的流水线并行
+
+## 为什么需要流水线并行？
+
+随着大语言模型（LLM）扩展到万亿参数架构和"无限"上下文窗口，底层服务基础设施必须向更细粒度、跨节点的并行化策略发展。虽然 KV 缓存技术有效减轻了冗余计算，但它们无法规避超长序列中固有的首批令牌时间（TTFT）问题，这些序列具有极大的初始输入令牌长度（ITL）。虽然张量并行（TP）仍然是节点内扩展的常规方法，但在多节点部署中经常遇到通信瓶颈。另一方面，流水线并行只需要在每个流水线阶段的边界进行跨节点通信，与大型 TP 相比可以实现更好的计算-通信重叠。因此，它也是提高吞吐量的一个有前途的并行化策略。
+
+详细的分析可以在这篇[博客](https://lmsys.org/blog/2026-01-15-chunked-pipeline/)中找到。
+
+## 基于异步通信的实现重构
+
+通过动态分块预填充，流水线并行有潜力减少长上下文输入的 TTFT。对于每个请求，其输入令牌可以分成多个块，每个块不大于分块预填充大小。同一请求的不同块可以同时由不同的节点处理，从而并行化处理并减少 TTFT。SGLang 已经支持流水线并行（#5724）一段时间，并使其与 PD 分离功能（#8846）兼容，但实现并不完美，有很大的性能改进空间。
 
 To eliminate this performance hazard, SGLang implements a Micro-batching Event Loop with non-blocking asynchronous peer-to-peer (P2P) communication to overlap GPU computation with CPU metadata processing and PP communication. This ensures that while one micro-batch is being computed on the GPU, the next one is already being prepared and moved into position effectively, ensuring the pipeline remains as saturated as possible. This approach was first proposed in #7979 and has been redesigned and included in #11852.
 
@@ -15,6 +24,13 @@ The key mechanisms of the implementation include:
 
 * **Decoupled Sync/Async Logic in the Event Loop:** The scheduler uses `async_send` in `_pp_send_pyobj_to_next_stage`. Instead of waiting for a transfer to complete, it returns a `P2PWork` handle. The actual synchronization (`P2PWork.work.wait()`) is deferred until `_pp_commit_comm_work` is called, allowing the CPU to perform other work—like scheduling the next batch or processing metadata—while data is in flight.
 * **Multi-Stream Execution:** In addition to the main `default_stream`, which serves as the synchronization stream, SGLang utilizes dedicated `forward_stream` and `copy_stream` to execute forward pass GPU computation and Data-to-Host (D2H) memory transfers separately for better overlapping. While `_pp_launch_batch` is executing the current micro-batch on the GPU for the current stage, the CPU processes the previous micro-batch's results using `_pp_process_batch_result`.
+
+**中文对照**：为了消除这种性能隐患，SGLang 实现了微批次事件循环，使用非阻塞异步点对点（P2P）通信来重叠 GPU 计算与 CPU 元数据处理和 PP 通信。这确保了当一个微批次正在 GPU 上计算时，下一个已经准备好并有效地移动到位，确保流水线保持尽可能饱和。该方法最初在 #7979 中提出，并在 #11852 中重新设计和包含。
+
+实现的关键机制包括：
+
+* **事件循环中解耦的同步/异步逻辑：** 调度器在 `_pp_send_pyobj_to_next_stage` 中使用 `async_send`。它不等待传输完成，而是返回一个 `P2PWork` 句柄。实际的同步（`P2PWork.work.wait()`）延迟到调用 `_pp_commit_comm_work` 时，允许 CPU 在数据传输过程中执行其他工作——比如调度下一个批次或处理元数据。
+* **多流执行：** 除了作为同步流的主 `default_stream` 之外，SGLang 还利用专用的 `forward_stream` 和 `copy_stream` 分别执行前向传递 GPU 计算和数据到主机（D2H）内存传输，以实现更好的重叠。当 `_pp_launch_batch` 在当前阶段的 GPU 上执行当前微批次时，CPU 使用 `_pp_process_batch_result` 处理前一个微批次的结果。
 
 ## Guidance about Dynamic Chunking
 
@@ -114,3 +130,40 @@ Note: `--disable-radix-cache` is enabled only for reproducible benchmarking purp
 
 ## Best Practice for Pipeline Parallelism with PD Disaggregation
 To be added. Stay tuned for the latest updates on Pipeline Parallelism with PD Disaggregation.
+
+## 代码实现
+
+### 核心文件
+
+| 文件 | 作用 |
+|------|------|
+| `python/sglang/srt/managers/scheduler_pp_mixin.py` | 微批次事件循环：`_pp_send_pyobj_to_next_stage()`、`_pp_launch_batch()`、`_pp_process_batch_result()`、`_pp_commit_comm_work()` |
+| `python/sglang/srt/managers/scheduler.py` | 将 PP mixin 集成到主调度循环；分块预填充大小管理 |
+| `python/sglang/srt/distributed/parallel_state.py` | PP 进程组初始化、`pp_size`、阶段 rank 分配 |
+| `python/sglang/srt/server_args.py` | 定义 `--pp-size`、`--chunked-prefill-size`、`--enable-dynamic-chunking` 标志 |
+| `python/sglang/srt/entrypoints/http_server.py` | PP 部署的多节点启动协调 |
+
+### 架构
+
+```
+[Stage 0: GPU 0-7]     [Stage 1: GPU 8-15]    [Stage 2: GPU 16-23]   [Stage 3: GPU 24-31]
+  Layers 0-14            Layers 15-29           Layers 30-44           Layers 45-60
+       │                      │                      │                      │
+       │── async P2P send ──▶ │── async P2P send ──▶ │── async P2P send ──▶ │
+       │                      │                      │                      │
+  forward_stream         forward_stream          forward_stream         forward_stream
+  copy_stream            copy_stream             copy_stream            copy_stream
+  default_stream(sync)   default_stream(sync)    default_stream(sync)   default_stream(sync)
+```
+
+### 关键代码逻辑
+
+- **异步 P2P 通信**: `_pp_send_pyobj_to_next_stage()` 使用 `async_send` 返回 `P2PWork` 句柄；同步延迟到 `_pp_commit_comm_work()` 以实现 CPU/GPU 重叠
+- **多流执行**: 专用的 `forward_stream`（GPU 计算）、`copy_stream`（D2H 传输）和 `default_stream`（同步）以实现最大重叠
+- **动态分块**: 二次运行时模型基于前缀长度预测最优块大小，对齐到 `max(--page-size, 64)` 的倍数；由 `SGLANG_DYNAMIC_CHUNKING_SMOOTH_FACTOR`（默认 0.75）控制
+
+### 集成要点
+
+- **服务器标志**: `--pp-size N`、`--chunked-prefill-size`、`--enable-dynamic-chunking`、`--nnodes`、`--node-rank`、`--dist-init-addr`
+- **环境变量**: `SGLANG_DYNAMIC_CHUNKING_SMOOTH_FACTOR` (0.0-1.0)、`SGLANG_PP_LAYER_PARTITION`（例如 `15,15,15,16`）
+- **与 PD 分离兼容**: PP 可以与 `--disaggregation-mode prefill/decode` 结合用于长上下文服务

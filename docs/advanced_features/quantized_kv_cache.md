@@ -4,6 +4,12 @@ Quantized KV cache reduces the memory footprint of key-value cache storage by us
 
 Quantized KV cache is a memory optimization technique that primarily benefits throughput by allowing more tokens to be cached, but may introduce minimal accuracy degradation depending on the quantization format used.
 
+**中文对照**：# 量化 KV 缓存
+
+量化 KV 缓存通过使用较低精度的数据类型（FP8 或 FP4）而不是 BF16 中的默认模型精度来减少键值缓存存储的内存占用。在自回归生成过程中，LLM 会缓存先前计算的键值对以避免冗余计算。KV 缓存通常占用大量 GPU 内存，特别是对于长序列。
+
+量化 KV 缓存是一种内存优化技术，主要通过允许缓存更多令牌来提高吞吐量，但根据使用的量化格式可能会引入最小的精度下降。
+
 ```{warning}
 **Performance Warning**: When quantized KV cache must be dequantized before use in attention operations, performance can be extremely slow if dequantization is not fused with the attention kernel. Always verify that your chosen attention backend supports quantized KV cache. Backends without fused support may experience significant throughput degradation, potentially negating the memory benefits.
 
@@ -160,3 +166,34 @@ Evaluate FP4 accuracy on your specific model and workload. Large models on simpl
 - [Attention Backend](attention_backend.md)
 - [Server Arguments](server_arguments.md)
 ```
+
+## 代码实现
+
+### 核心文件
+量化 KV cache 的实现分布在量化配置和注意力后端之间：
+- `python/sglang/srt/layers/quantization/kv_cache.py`: 定义 `BaseKVCacheMethod`，管理 `k_scale` 和 `v_scale`。
+- `python/sglang/srt/layers/attention/flashinfer_backend.py`: 实现使用这些缩放因子的融合 FP8 注意力内核。
+- `python/sglang/srt/mem_cache/memory_pool.py`: 管理底层的分页 GPU 内存，支持不同的数据类型（FP8/FP16/BF16）。
+
+### 架构
+KV cache 量化集成到 `RadixAttention` 层中。在模型初始化期间，如果 `--kv-cache-dtype` 设置为量化格式（如 `fp8_e4m3`），注意力层会实例化一个 `BaseKVCacheMethod`。该方法负责创建 `k_scale` 和 `v_scale` 参数。在前向传播期间，注意力后端（例如 FlashInfer）接收这些缩放因子，并在 CUDA 内核中执行融合的量化（在 prefill/append 期间）或反量化（在 decode/sampling 期间），以最小化延迟。
+
+### 关键代码逻辑
+- **BaseKVCacheMethod**: 管理量化的缩放因子。
+  ```python
+  class BaseKVCacheMethod(QuantizeMethodBase):
+      def create_weights(self, layer: torch.nn.Module):
+          layer.k_scale = torch.nn.Parameter(torch.tensor(-1.0), requires_grad=False)
+          layer.v_scale = torch.nn.Parameter(torch.tensor(-1.0), requires_grad=False)
+  ```
+- **后端集成**: 将缩放因子传递给注意力内核（来自 `flashinfer_backend.py` 的示例）。
+  ```python
+  self.k_scale_float = getattr(layer, "k_scale_float", 1.0)
+  self.v_scale_float = getattr(layer, "v_scale_float", 1.0)
+  # Invoking flashinfer kernel with k_scale and v_scale
+  ```
+
+### 集成要点
+- **服务器启动**: `python/sglang/srt/server_args.py` 解析 `--kv-cache-dtype` 和 `--quantization-param-path`。
+- **内存管理**: `Req` 和 `TokenizedGenerateReqInput` 将所需的 KV cache 格式的元数据传递给 `Scheduler`。
+- **内核层**: 后端中的自定义 CUDA 内核必须显式支持指定的 `kv_cache_dtype`，以避免回退到未融合的反量化导致的性能下降。
